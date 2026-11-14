@@ -82,34 +82,83 @@ nap() {
 
 # ----------------------------------------------------------------- gpu
 
-# KO: the build of the kernel module for the running kernel, or empty
+# KMI: the kernel series, e.g. android16-6.12 for release 6.12.58-android16-6-...
+# KO: the build of the kernel module for that series, or empty
 gpu_ko() {
     KO=
-    case $(uname -r 2>/dev/null) in
-    6.12.*-android16-*) KO=$MODDIR/kmod/kgsl_nowait-android16-6.12.ko ;;
+    KMI=
+    rel=$(uname -r 2>/dev/null)
+    case $rel in
+    [0-9]*.[0-9]*.*-android[0-9]*-*)
+        kv=${rel%%-*}
+        kv=${kv%.*}
+        gen=${rel#*-}
+        gen=${gen%%-*}
+        case $kv$gen in *[!a-z0-9.]*) ;; *) KMI=$gen-$kv ;; esac
+        ;;
     esac
-    [ -n "$KO" ] && [ -f "$KO" ] || KO=
+    [ -n "$KMI" ] && [ -f "$MODDIR/kmod/kgsl_nowait-$KMI.ko" ] && KO=$MODDIR/kmod/kgsl_nowait-$KMI.ko
+    return 0
 }
 
-# GPU_STATE: on, off, na (GPU_WHY: driver, kernel) or err (GPU_WHY: symbol, insmod)
+# ADDR: where the driver keeps the number, or empty when this driver has none.
+# The driver keeps it in a variable of its own, so the address has to come
+# from the kernel's symbol list; that is read once per boot.
+gpu_addr() {
+    ADDR=$(cat "$RUN/gpu.addr" 2>/dev/null)
+    if [ -n "$ADDR" ]; then
+        [ "$ADDR" = none ] && ADDR=
+        return 0
+    fi
+    kptr=$PROC/sys/kernel/kptr_restrict
+    old=$(cat "$kptr" 2>/dev/null)
+    echo 1 >"$kptr" 2>/dev/null
+    grep ' kgsl_pool_retry_min_order' "$PROC/kallsyms" >"$RUN/gpu.sym" 2>/dev/null
+    is_num "$old" && echo "$old" >"$kptr" 2>/dev/null
+    found=0
+    while read -r a t sym mod; do
+        [ "$sym" = kgsl_pool_retry_min_order ] && [ "$mod" = "[msm_kgsl]" ] && ADDR=$a && found=1
+    done <"$RUN/gpu.sym"
+    rm -f "$RUN/gpu.sym"
+    case $ADDR in
+    '' | *[!0-9a-f]*) ADDR= ;;
+    *[!0]*) ;;
+    *)
+        # all zeros: the kernel would not show the address; ask again next time
+        ADDR=
+        return 0
+        ;;
+    esac
+    [ "$found" = 1 ] && [ -n "$ADDR" ] && echo "$ADDR" >"$RUN/gpu.addr" && return 0
+    echo none >"$RUN/gpu.addr"
+}
+
+# GPU_STATE: on, off, err (insmod failed) or na. GPU_WHY for na:
+#   driver   no Adreno driver loaded as a module
+#   setting  this driver has no such number: it never waits, nothing to fix
+#   kernel   the number is there, but there is no build for this kernel series
 gpu_state() {
     GPU_WHY=
     GPU_WAS=
+    gpu_ko
     if [ -d "$KPARAM" ]; then
         GPU_WAS=$(cat "$KPARAM/saved" 2>/dev/null)
         if [ "$(cat "$KPARAM/enabled" 2>/dev/null)" = 1 ]; then GPU_STATE=on; else GPU_STATE=off; fi
         return 0
     fi
-    gpu_ko
+    GPU_STATE=na
     if [ ! -d "$SYSMOD/msm_kgsl" ]; then
-        GPU_STATE=na
         GPU_WHY=driver
+        return 0
+    fi
+    gpu_addr
+    if [ -z "$ADDR" ]; then
+        GPU_WHY=setting
     elif [ -z "$KO" ]; then
-        GPU_STATE=na
         GPU_WHY=kernel
     elif [ -f "$RUN/gpu.err" ]; then
         GPU_STATE=err
-        GPU_WHY=$(cat "$RUN/gpu.err")
+        GPU_WHY=insmod
     else
         GPU_STATE=off
     fi
@@ -122,34 +171,13 @@ gpu_on() {
     fi
     gpu_state
     [ "$GPU_STATE" = na ] && return 1
-    # The driver keeps the number in a variable of its own, so its address has
-    # to come from the kernel's symbol list; the module checks the name again.
-    kptr=$PROC/sys/kernel/kptr_restrict
-    old=$(cat "$kptr" 2>/dev/null)
-    echo 1 >"$kptr" 2>/dev/null
-    grep ' kgsl_pool_retry_min_order' "$PROC/kallsyms" >"$RUN/gpu.sym" 2>/dev/null
-    is_num "$old" && echo "$old" >"$kptr" 2>/dev/null
-    addr=
-    while read -r a t sym mod; do
-        [ "$sym" = kgsl_pool_retry_min_order ] && [ "$mod" = "[msm_kgsl]" ] && addr=$a
-    done <"$RUN/gpu.sym"
-    rm -f "$RUN/gpu.sym"
-    case $addr in
-    '' | *[!0-9a-f]*) addr= ;;
-    *[!0]*) ;;
-    *) addr= ;;
-    esac
-    if [ -z "$addr" ]; then
-        echo symbol >"$RUN/gpu.err"
-        log "gpu: the driver has no kgsl_pool_retry_min_order"
-        return 1
-    fi
-    if out=$(insmod "$KO" "addr=0x$addr" 2>&1); then
+    # the module checks the name behind the address again before it writes
+    if out=$(insmod "$KO" "addr=0x$ADDR" 2>&1); then
         rm -f "$RUN/gpu.err"
         log "gpu: on, the driver had $(cat "$KPARAM/saved" 2>/dev/null)"
         return 0
     fi
-    echo insmod >"$RUN/gpu.err"
+    : >"$RUN/gpu.err"
     log "gpu: insmod failed: $out"
     return 1
 }
@@ -409,6 +437,7 @@ status() {
     echo "gpu_state=$GPU_STATE"
     echo "gpu_why=$GPU_WHY"
     echo "gpu_was=$GPU_WAS"
+    echo "gpu_series=$KMI"
     echo "reserve=$RESERVE"
     echo "reserve_state=$RES_STATE"
     echo "reserve_now=$RES_NOW"

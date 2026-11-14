@@ -15,16 +15,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # kgsl_nowait.ko, built against the GKI headers and compiler of android16-6.12 (the DDK image)
+  # kgsl_nowait.ko for each GKI kernel series, built against that series'
+  # headers with its compiler (the DDK images). Only android16-6.12 has run
+  # on a phone; a series whose image or build fails is left out.
   kmod:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    continue-on-error: ${{ matrix.kmi != 'android16-6.12' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        kmi:
+          - android12-5.10
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
     steps:
       - uses: actions/checkout@v4
 
       - name: Build kgsl_nowait.ko
+        env:
+          KMI: ${{ matrix.kmi }}
         run: |
-          KMI=android16-6.12
           img=
           for tag in "$KMI-20260313" "$KMI"; do
             if docker pull -q "ghcr.io/ylarod/ddk-min:$tag"; then img="ghcr.io/ylarod/ddk-min:$tag"; break; fi
@@ -33,9 +48,9 @@ jobs:
           echo "image: $img"
           docker run --rm -v "$PWD/kmod:/work" "$img" sh -c '
             set -e
-            K=/opt/ddk/kdir/android16-6.12
+            K=$(ls -d /opt/ddk/kdir/* | head -n 1)
             CLANG=$(echo /opt/ddk/clang/clang-r*/bin)
-            echo "kernel release: $(cat $K/include/config/kernel.release 2>/dev/null)"; echo "clang: $CLANG"
+            echo "kernel: $K, release $(cat $K/include/config/kernel.release 2>/dev/null)"; echo "clang: $CLANG"
             make -C $K M=/work ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=$CLANG/clang LD=$CLANG/ld.lld AR=$CLANG/llvm-ar NM=$CLANG/llvm-nm OBJCOPY=$CLANG/llvm-objcopy OBJDUMP=$CLANG/llvm-objdump STRIP=$CLANG/llvm-strip CROSS_COMPILE=aarch64-linux-gnu- modules
             $CLANG/llvm-strip --strip-debug /work/kgsl_nowait.ko
             # phones ship their modules without BTF; one built against other headers could only fail to validate
@@ -46,7 +61,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kmod
+          name: kmod-${{ matrix.kmi }}
           path: out/
 
   build:
@@ -122,8 +137,14 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: kmod
+          pattern: kmod-*
+          merge-multiple: true
           path: module/kmod
+
+      - name: Kernel modules in the zip
+        run: |
+          ls -la module/kmod
+          [ -f module/kmod/kgsl_nowait-android16-6.12.ko ] || { echo "the build for android16-6.12 is missing"; exit 1; }
 
       - name: Package the module
         run: |

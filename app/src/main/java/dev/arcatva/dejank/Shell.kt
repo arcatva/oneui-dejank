@@ -81,6 +81,9 @@ object Ctl {
                 "echo \"android=\$(getprop ro.build.version.release)\"; " +
                 "echo \"oneui=\$(getprop ro.build.version.oneui)\"; " +
                 "echo \"kernel=\$(uname -r)\"; " +
+                // what the phone's firmware set the driver's retry threshold to, if anything
+                "for f in \$(find /sys/firmware/devicetree/base -name 'qcom,mempool-retry-min-order' 2>/dev/null); " +
+                "do echo \"firmware_value=\$(od -An -tx1 \$f)\"; done; " +
                 "sh \"\$d/dejank.sh\" status; echo; sh \"\$d/dejank.sh\" log 100",
             timeoutSec = 30,
         )

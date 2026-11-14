@@ -59,8 +59,12 @@ class ModelTest {
     @Test
     fun `why the gpu fix cannot work`() {
         assertEquals("No build for this kernel", status("gpu_state" to "na", "gpu_why" to "kernel").line(Fix.GPU))
+        assertEquals(
+            "No build for android15-6.6 yet",
+            status("gpu_state" to "na", "gpu_why" to "kernel", "gpu_series" to "android15-6.6").line(Fix.GPU),
+        )
         assertEquals("No Adreno driver on this device", status("gpu_state" to "na", "gpu_why" to "driver").line(Fix.GPU))
-        assertEquals("This driver has no such setting", status("gpu_state" to "err", "gpu_why" to "symbol").line(Fix.GPU))
+        assertEquals("Not needed: this driver never waits", status("gpu_state" to "na", "gpu_why" to "setting").line(Fix.GPU))
         val refused = status("gpu_state" to "err", "gpu_why" to "insmod")
         assertEquals("The kernel refused the module", refused.line(Fix.GPU))
         assertEquals(Tone.BAD, refused.tone(Fix.GPU))

@@ -18,7 +18,7 @@
 ## 要求
 
 - 已 Root，并有模块管理器：KernelSU、Magisk 或 APatch。
-- 显卡修复需要骁龙机型，内核为 `android16-6.12`。
+- 显卡修复需要骁龙机型，Adreno 驱动里要有那个重试设置，内核为 GKI 系列（`android12-5.10` 到 `android16-6.12`）。只有 `android16-6.12` 在真机上跑过。
 - 目前只在上面那台手机上测过。设备不支持的修复会显示为不可用，不会做任何事。
 
 ## 安装
@@ -116,7 +116,7 @@ bash tests/run.sh dash          # 在模拟的手机上测试模块脚本
 ./gradlew :app:assembleRelease  # App
 ```
 
-内核模块针对 `android16-6.12` 的 GKI 头文件构建，见 `kmod` 任务。
+内核模块为每个 GKI 内核系列各构建一份，见 `kmod` 任务。
 
 ## 许可证
 

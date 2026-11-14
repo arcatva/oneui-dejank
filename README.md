@@ -18,7 +18,7 @@ Cost: the reserve keeps about 3% of RAM free; keeping the UI in RAM takes 0.6 to
 ## Requirements
 
 - Root with a module manager: KernelSU, Magisk or APatch.
-- The GPU fix needs a Snapdragon phone on kernel `android16-6.12`.
+- The GPU fix needs a Snapdragon phone whose Adreno driver has the retry setting, on a GKI kernel (`android12-5.10` to `android16-6.12`). Only `android16-6.12` has run on a phone.
 - Tested on the phone above only. A fix that cannot work on a device shows as unavailable and does nothing.
 
 ## Install
@@ -116,7 +116,7 @@ bash tests/run.sh dash          # module scripts against a simulated phone
 ./gradlew :app:assembleRelease  # the app
 ```
 
-The kernel module builds against the `android16-6.12` GKI headers; see the `kmod` job.
+The kernel module is built once per GKI kernel series; see the `kmod` job.
 
 ## License
 

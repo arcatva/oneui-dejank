@@ -83,6 +83,8 @@ data class Status(
     val wanted: Map<Fix, Boolean>,
     val states: Map<Fix, FixState>,
     val gpuWhy: String = "",
+    /** The kernel series of this phone, e.g. android16-6.12; empty outside the series. */
+    val gpuSeries: String = "",
     /** The driver's own retry threshold, known once the module is loaded. */
     val gpuWas: Int? = null,
     val reserveNow: Int? = null,
@@ -127,8 +129,12 @@ data class Status(
                     gpuWas != null -> "Active · driver threshold $gpuWas → 0"
                     else -> "Active"
                 }
-                FixState.NA -> if (gpuWhy == "driver") "No Adreno driver on this device" else "No build for this kernel"
-                else -> if (gpuWhy == "symbol") "This driver has no such setting" else "The kernel refused the module"
+                FixState.NA -> when (gpuWhy) {
+                    "driver" -> "No Adreno driver on this device"
+                    "setting" -> "Not needed: this driver never waits"
+                    else -> if (gpuSeries.isEmpty()) "No build for this kernel" else "No build for $gpuSeries yet"
+                }
+                else -> "The kernel refused the module"
             }
 
             Fix.RESERVE -> when (state) {
@@ -170,6 +176,7 @@ fun parseStatus(text: String): Status? {
         wanted = Fix.entries.associateWith { map[it.key] == "1" },
         states = Fix.entries.associateWith { FixState.parse(map[it.key + "_state"]) },
         gpuWhy = map["gpu_why"].orEmpty(),
+        gpuSeries = map["gpu_series"].orEmpty(),
         gpuWas = map["gpu_was"]?.toIntOrNull(),
         reserveNow = map["reserve_now"]?.toIntOrNull(),
         reserveStock = map["reserve_stock"]?.toIntOrNull(),

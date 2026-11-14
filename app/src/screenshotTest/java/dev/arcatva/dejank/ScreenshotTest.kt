@@ -110,7 +110,10 @@ class ScreenshotTest {
     @Config(qualifiers = "w412dp-h1250dp-night-xhdpi")
     fun otherPhone() = shoot(
         "other_phone",
-        ready("gpu_state" to "na", "gpu_why" to "kernel", "gpu_was" to "", "pin" to "0", "pin_state" to "off"),
+        ready(
+            "gpu_state" to "na", "gpu_why" to "kernel", "gpu_series" to "android15-6.6", "gpu_was" to "",
+            "pin" to "0", "pin_state" to "off",
+        ),
     )
 
     @Test

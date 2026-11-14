@@ -161,6 +161,7 @@ has "not paused" "$S" "paused=0"
 expect "gpu on" "$(ctl set gpu 1)" "ok=1"
 called "the module for this kernel, with the address of the driver's own variable" "insmod $KO addr=0x$ADDR"
 expect "kptr_restrict is put back" "$(cat "$PROC/sys/kernel/kptr_restrict")" "2"
+expect "the address is remembered for this boot" "$(cat "$RUN/gpu.addr")" "$ADDR"
 S=$(ctl status)
 has "gpu is on" "$S" "gpu_state=on"
 has "what the driver had" "$S" "gpu_was=2"
@@ -176,10 +177,20 @@ expect "the switch is saved" "$(grep '^GPU=' "$DATA/conf")" "GPU=0"
 phone
 echo "6.6.30-android15-8-xyz" >"$T/uname"
 S=$(ctl status)
-has "no build for another kernel" "$S" "gpu_state=na"
+has "no build for another kernel series" "$S" "gpu_state=na"
 has "says why" "$S" "gpu_why=kernel"
+has "and which series it is" "$S" "gpu_series=android15-6.6"
 expect "cannot be switched on there" "$(ctl set gpu 1)" "error=failed"
 not_called "nothing is loaded" "insmod"
+: >"$T/mod/kmod/kgsl_nowait-android15-6.6.ko"
+expect "with a build for that series it can" "$(ctl set gpu 1)" "ok=1"
+called "and that build is the one loaded" "insmod $T/mod/kmod/kgsl_nowait-android15-6.6.ko addr=0x$ADDR"
+
+phone
+echo "4.19.113-perf+" >"$T/uname"
+S=$(ctl status)
+has "a kernel outside the series" "$S" "gpu_why=kernel"
+has "has no series" "$S" "gpu_series="
 
 phone
 rm -rf "$SYSMOD/msm_kgsl"
@@ -190,16 +201,18 @@ has "says why" "$S" "gpu_why=driver"
 phone
 printf '%s\n' "ffffffc07e300000 b kgsl_pool_retry_min_order_x	[other]" \
     "ffffffc07e300008 b kgsl_pool_retry_min_order	[other]" >"$PROC/kallsyms"
-expect "a driver without the variable" "$(ctl set gpu 1)" "error=failed"
-not_called "nothing is loaded without the address" "insmod"
 S=$(ctl status)
-has "shown as an error" "$S" "gpu_state=err"
-has "the error is the symbol" "$S" "gpu_why=symbol"
+has "a driver without the number has nothing to fix" "$S" "gpu_state=na"
+has "says so" "$S" "gpu_why=setting"
+expect "and cannot be switched on" "$(ctl set gpu 1)" "error=failed"
+not_called "nothing is loaded without the address" "insmod"
+expect "the symbol list is read once per boot" "$(cat "$RUN/gpu.addr")" "none"
 
 phone
 printf '%s\n' "0000000000000000 b kgsl_pool_retry_min_order	[msm_kgsl]" >"$PROC/kallsyms"
 expect "a hidden address is no address" "$(ctl set gpu 1)" "error=failed"
 not_called "nothing is loaded with address 0" "insmod"
+[ ! -e "$RUN/gpu.addr" ] && ok || bad "a hidden address is remembered as none"
 
 phone
 : >"$T/insmod.fail"
