@@ -165,7 +165,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           awk -v v="## $GITHUB_REF_NAME" '$0 == v { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md >notes.md
-          gh release create "$GITHUB_REF_NAME" out/*.zip --title "$GITHUB_REF_NAME" --notes-file notes.md
+          # a release published on GitHub already exists and only lacks the zip
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" out/*.zip --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" out/*.zip --title "$GITHUB_REF_NAME" --notes-file notes.md
+          fi
 
   # Renders the screens on the JVM so layout changes can be reviewed without a
   # phone. Never blocks the build above.
