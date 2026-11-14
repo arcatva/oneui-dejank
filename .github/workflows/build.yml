@@ -145,7 +145,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Render screens
-        run: ./gradlew :app:testDebugUnitTest -Pscreenshots --tests '*ScreenshotTest*'
+        # --rerun: a result taken from the build cache writes no pictures
+        run: ./gradlew :app:testDebugUnitTest --rerun -Pscreenshots --tests '*ScreenshotTest*'
 
       # kept on a branch of their own, replaced by every build of main
       - name: Publish renders
