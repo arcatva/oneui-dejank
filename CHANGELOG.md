@@ -1,9 +1,3 @@
-## v0.1.2
-
-- Keep the UI in RAM no longer grows without limit. What System UI and Home use stays protected; file cache they no longer use can be freed again.
-
-- 界面常驻内存不再无限增长：系统界面和桌面在用的部分仍受保护，不再使用的文件缓存可以被回收。
-
 ## v0.1.1
 
 - No-wait GPU memory is built for every GKI kernel series, `android12-5.10` to `android16-6.12`. Only `android16-6.12` has run on a phone.

@@ -13,7 +13,7 @@ A root module with an app; each fix has its own switch.
 
 ¹ One Galaxy Z Fold8 (SM-F971B, kernel 6.12 android16), Perfetto traces while switching between heavy apps.
 
-Cost: the reserve keeps about 3% of RAM free; keeping the UI in RAM takes about 1 GB from other apps.
+Cost: the reserve keeps about 3% of RAM free; keeping the UI in RAM takes 0.6 to 1 GB from other apps.
 
 ## Requirements
 
@@ -100,7 +100,7 @@ memory.events:  low 856     reclaimed 856 times while under its protection
 7.1 s:  System UI  16 ms + 2 ms     Launcher  7 ms + 0 ms
 ```
 
-The module puts both in a cgroup directly under the root, where protection needs no budget from a parent, with `memory.swap.max=0` and `memory.min` following what the two use (their own memory and the files they have mapped, plus 128 MB), so that file cache they no longer use can still be freed. They restart once so that all their memory starts inside it.
+The module puts both in a cgroup directly under the root, where protection needs no budget from a parent, with `memory.min=max` and `memory.swap.max=0`. They restart once so that all their memory starts inside it.
 
 ## Not fixed
 

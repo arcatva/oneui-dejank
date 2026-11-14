@@ -11,8 +11,8 @@
 #          memory at once instead of waiting for a large one
 # reserve  vm.watermark_scale_factor = 300: memory is freed in the background
 #          earlier, so apps rarely have to wait for it
-# pin      System UI and Home live in their own memory group: never swapped,
-#          and what they use is never reclaimed
+# pin      System UI and Home live in their own memory group that is never
+#          reclaimed and never swapped
 #
 # Nothing is written to /system or /vendor; a reboot undoes all of it.
 
@@ -260,16 +260,6 @@ pin_setup() {
     return 0
 }
 
-# What the two apps use stays protected: their own memory (which cannot be
-# swapped anyway) and the files they have mapped, plus 128 MB. File cache
-# beyond that, such as files they once read or wrote, can be freed again;
-# with no limit at all the group only ever grows.
-pin_budget() {
-    mb=$(awk '$1 == "anon" || $1 == "file_mapped" { s += $2 } END { printf "%d", s / 1048576 + 128 }' "$GRP/memory.stat" 2>/dev/null)
-    is_num "$mb" && [ "$mb" -gt 128 ] && echo "${mb}M" >"$GRP/memory.min" 2>/dev/null
-    return 0
-}
-
 in_group() {
     grep -qx "$1" "$GRP/cgroup.procs" 2>/dev/null
 }
@@ -394,9 +384,7 @@ pin_state() {
 }
 
 # Keeps the two apps in the group: they are caught as they start during boot,
-# and looked for again every 20 s in case one was restarted. For the first
-# three minutes everything in the group is protected; then the budget follows
-# what the apps use.
+# and looked for again every 20 s in case one was restarted.
 watch() {
     load_conf
     [ "$PIN" = 1 ] && [ ! -f "$PAUSE" ] || return 0
@@ -414,7 +402,6 @@ watch() {
             i=$((i + 1))
             sleep "${WATCH_FAST:-0.2}" 2>/dev/null || sleep 1
         else
-            pin_budget
             [ -n "$WATCH_ONCE" ] && return 0
             sleep 20
             # the default home app can change; asked every five minutes
