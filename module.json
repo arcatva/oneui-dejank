@@ -1,0 +1,5 @@
+{
+  "metamodule": false,
+  "summary": "Three memory fixes for animation stutter on Samsung One UI (Snapdragon), each with its own switch.",
+  "sourceUrl": "https://github.com/arcatva/oneui-dejank"
+}

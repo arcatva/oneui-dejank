@@ -1,5 +1,7 @@
 # One UI Dejank
 
+**English** | [中文](README_CN.md)
+
 Three memory fixes for animation stutter on Samsung One UI (Snapdragon).
 A root module with an app; each fix has its own switch.
 
@@ -21,7 +23,7 @@ Cost: the reserve keeps about 3% of RAM free; keeping the UI in RAM takes 0.6 to
 
 ## Install
 
-1. Flash `oneui-dejank-vX.Y.Z.zip` in your root manager. It installs the app.
+1. Download the zip from [Releases](https://github.com/arcatva/oneui-dejank/releases) and flash it in your root manager. It installs the app.
 2. Open **Dejank**, grant root, tap **Apply**. No reboot needed.
 
 After a reboot the module applies whatever is switched on.

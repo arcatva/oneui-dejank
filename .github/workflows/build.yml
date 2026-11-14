@@ -64,6 +64,18 @@ jobs:
           bash tests/run.sh dash
           bash tests/run.sh "busybox ash"
 
+      - name: Versions agree
+        run: |
+          version=$(sed -n 's/^version=//p' module/module.prop)
+          code=$(sed -n 's/^versionCode=//p' module/module.prop)
+          [ "$(jq -r .version update.json)" = "$version" ] || { echo "update.json: version is not $version"; exit 1; }
+          [ "$(jq -r .versionCode update.json)" = "$code" ] || { echo "update.json: versionCode is not $code"; exit 1; }
+          [ "$(jq -r '.metamodule | type' module.json)" = boolean ] || { echo "module.json: metamodule must be true or false"; exit 1; }
+          grep -q "^## $version\$" CHANGELOG.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+          case $GITHUB_REF in refs/tags/*)
+            [ "$GITHUB_REF_NAME" = "$version" ] || { echo "tag $GITHUB_REF_NAME is not $version"; exit 1; } ;;
+          esac
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -74,23 +86,39 @@ jobs:
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest
 
+      # The key itself is the secret; its password is not one.
       - name: Signing key
         env:
           KEYSTORE_B64: ${{ secrets.DEJANK_KEYSTORE_B64 }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d >"$RUNNER_TEMP/release.jks"
-            echo "DEJANK_KEYSTORE=$RUNNER_TEMP/release.jks" >>"$GITHUB_ENV"
+            echo "$KEYSTORE_B64" | base64 -d >"$RUNNER_TEMP/release.p12"
+            echo "DEJANK_KEYSTORE=$RUNNER_TEMP/release.p12" >>"$GITHUB_ENV"
+          elif [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            echo "::error::A release needs the signing key: add the secret DEJANK_KEYSTORE_B64"
+            exit 1
           else
             echo "::warning::No signing key in the secrets: the app is signed with a throwaway debug key"
           fi
 
       - name: Build the app
         env:
-          DEJANK_KEYSTORE_PASSWORD: ${{ secrets.DEJANK_KEYSTORE_PASSWORD }}
-          DEJANK_KEY_ALIAS: ${{ secrets.DEJANK_KEY_ALIAS }}
-          DEJANK_KEY_PASSWORD: ${{ secrets.DEJANK_KEY_PASSWORD }}
+          DEJANK_KEYSTORE_PASSWORD: dejank
+          DEJANK_KEY_ALIAS: dejank
+          DEJANK_KEY_PASSWORD: dejank
         run: ./gradlew :app:assembleRelease
+
+      - name: Signed by
+        run: |
+          signer=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)/apksigner
+          got=$("$signer" verify --print-certs app/build/outputs/apk/release/app-release.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          echo "certificate SHA-256: $got"
+          if [ -n "$DEJANK_KEYSTORE" ] && [ "$got" != "$RELEASE_CERT" ]; then
+            echo "::error::The secret holds another key than the release key ($RELEASE_CERT)"
+            exit 1
+          fi
+        env:
+          RELEASE_CERT: a196e1a183fcf3419c2fbe3426f708985ee7a027655176add859d5b6113fbadc
 
       - uses: actions/download-artifact@v4
         with:
@@ -111,22 +139,13 @@ jobs:
           name: oneui-dejank
           path: out/
 
-      - name: Rolling build
-        if: github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release delete latest --yes --cleanup-tag || true
-          gh release create latest out/*.zip \
-            --title "Latest build" \
-            --notes "Built from ${GITHUB_SHA}. Flash the zip in your root manager; the app is installed with it." \
-            --prerelease --target "${GITHUB_SHA}"
-
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" out/*.zip --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          awk -v v="## $GITHUB_REF_NAME" '$0 == v { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md >notes.md
+          gh release create "$GITHUB_REF_NAME" out/*.zip --title "$GITHUB_REF_NAME" --notes-file notes.md
 
   # Renders the screens on the JVM so layout changes can be reviewed without a
   # phone. Never blocks the build above.
