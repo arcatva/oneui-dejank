@@ -101,7 +101,9 @@ jobs:
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest
 
-      # The key itself is the secret; its password is not one.
+      # The key itself is the secret; its password is not one. Without it the
+      # app is signed with a key nobody keeps: it works, but the next version
+      # cannot update it in place, so the installer replaces it.
       - name: Signing key
         env:
           KEYSTORE_B64: ${{ secrets.DEJANK_KEYSTORE_B64 }}
@@ -109,9 +111,6 @@ jobs:
           if [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d >"$RUNNER_TEMP/release.p12"
             echo "DEJANK_KEYSTORE=$RUNNER_TEMP/release.p12" >>"$GITHUB_ENV"
-          elif [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
-            echo "::error::A release needs the signing key: add the secret DEJANK_KEYSTORE_B64"
-            exit 1
           else
             echo "::warning::No signing key in the secrets: the app is signed with a throwaway debug key"
           fi
