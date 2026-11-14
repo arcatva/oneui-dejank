@@ -1,0 +1,13 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+captures/
+# added to the module by CI
+module/dejank.apk
+module/kmod/*.ko
+# never commit a signing key
+*.keystore
+*.jks

@@ -1,0 +1,154 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # kgsl_nowait.ko, built against the GKI headers and compiler of android16-6.12 (the DDK image)
+  kmod:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build kgsl_nowait.ko
+        run: |
+          KMI=android16-6.12
+          img=
+          for tag in "$KMI-20260313" "$KMI"; do
+            if docker pull -q "ghcr.io/ylarod/ddk-min:$tag"; then img="ghcr.io/ylarod/ddk-min:$tag"; break; fi
+          done
+          [ -n "$img" ] || { echo "no DDK image for $KMI"; exit 1; }
+          echo "image: $img"
+          docker run --rm -v "$PWD/kmod:/work" "$img" sh -c '
+            set -e
+            K=/opt/ddk/kdir/android16-6.12
+            CLANG=$(echo /opt/ddk/clang/clang-r*/bin)
+            echo "kernel release: $(cat $K/include/config/kernel.release 2>/dev/null)"; echo "clang: $CLANG"
+            make -C $K M=/work ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=$CLANG/clang LD=$CLANG/ld.lld AR=$CLANG/llvm-ar NM=$CLANG/llvm-nm OBJCOPY=$CLANG/llvm-objcopy OBJDUMP=$CLANG/llvm-objdump STRIP=$CLANG/llvm-strip CROSS_COMPILE=aarch64-linux-gnu- modules
+            $CLANG/llvm-strip --strip-debug /work/kgsl_nowait.ko
+            # phones ship their modules without BTF; one built against other headers could only fail to validate
+            $CLANG/llvm-objcopy --remove-section=.BTF --remove-section=.BTF.base /work/kgsl_nowait.ko
+          '
+          readelf -p .modinfo kmod/kgsl_nowait.ko
+          mkdir out && cp kmod/kgsl_nowait.ko "out/kgsl_nowait-$KMI.ko"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kmod
+          path: out/
+
+  build:
+    runs-on: ubuntu-latest
+    needs: kmod
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Module tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mksh busybox-static >/dev/null
+          bash tests/run.sh mksh
+          bash tests/run.sh dash
+          bash tests/run.sh "busybox ash"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest
+
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.DEJANK_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d >"$RUNNER_TEMP/release.jks"
+            echo "DEJANK_KEYSTORE=$RUNNER_TEMP/release.jks" >>"$GITHUB_ENV"
+          else
+            echo "::warning::No signing key in the secrets: the app is signed with a throwaway debug key"
+          fi
+
+      - name: Build the app
+        env:
+          DEJANK_KEYSTORE_PASSWORD: ${{ secrets.DEJANK_KEYSTORE_PASSWORD }}
+          DEJANK_KEY_ALIAS: ${{ secrets.DEJANK_KEY_ALIAS }}
+          DEJANK_KEY_PASSWORD: ${{ secrets.DEJANK_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kmod
+          path: module/kmod
+
+      - name: Package the module
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk module/dejank.apk
+          cp LICENSE module/LICENSE
+          version=$(sed -n 's/^version=//p' module/module.prop)
+          (cd module && zip -r -q "../out/oneui-dejank-$version.zip" .)
+          unzip -l out/*.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oneui-dejank
+          path: out/
+
+      - name: Rolling build
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest out/*.zip \
+            --title "Latest build" \
+            --notes "Built from ${GITHUB_SHA}. Flash the zip in your root manager; the app is installed with it." \
+            --prerelease --target "${GITHUB_SHA}"
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" out/*.zip --title "$GITHUB_REF_NAME" --generate-notes
+
+  # Renders the screens on the JVM so layout changes can be reviewed without a
+  # phone. Never blocks the build above.
+  renders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Render screens
+        run: ./gradlew :app:testDebugUnitTest -Pscreenshots --tests '*ScreenshotTest*'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: renders
+          path: app/build/screenshots/
