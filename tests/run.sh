@@ -93,6 +93,7 @@ for d in "$@"; do
         echo max >"$d/memory.swap.max"
         echo 656683008 >"$d/memory.current"
         echo 0 >"$d/memory.swap.current"
+        printf '%s\n' "anon 511705088" "file 1271922688" "kernel 0" "file_mapped 632291328" >"$d/memory.stat"
         : >"$d/cgroup.procs"
         ;;
     esac
@@ -261,7 +262,6 @@ app com.android.systemui 100 5000
 app com.example.home 200 6000
 expect "pin on" "$(ctl set pin 1)" "ok=1"
 expect "the controller is switched on at the root" "$(cat "$CG/cgroup.subtree_control")" "+memory"
-expect "never reclaimed" "$(cat "$CG/dejank/memory.min")" "max"
 expect "never swapped" "$(cat "$CG/dejank/memory.swap.max")" "0"
 called "System UI is restarted into the group" "kill 100"
 called "the default home app too" "kill 200"
@@ -273,6 +273,8 @@ has "two apps run" "$S" "pin_apps=2"
 has "both are in" "$S" "pin_in=2"
 has "memory kept" "$S" "pin_kb=641292"
 has "nothing swapped" "$S" "pin_swap_kb=0"
+
+expect "after its first rounds the watcher protects what the apps use plus 128 MB" "$(cat "$CG/dejank/memory.min")" "1219M"
 
 # a restarted app shows up outside the group; the watcher brings it in
 app com.example.home 300 99000
@@ -287,6 +289,25 @@ expect "back where it came from" "$(cat "$CG/apps/uid_10056/pid_100/cgroup.procs
 expect "or to the root when that is gone" "$(sort "$CG/cgroup.procs" | tr '\n' ' ')" "101 201 300 "
 expect "the controller is switched off again" "$(cat "$CG/cgroup.subtree_control")" "-memory"
 has "pin is off" "$(ctl status)" "pin_state=off"
+
+# while the group is set up everything in it is protected
+phone
+WATCH_ROUNDS=1000000 ctl apply boot >/dev/null
+app com.android.systemui 100 99500
+( PATH="$T/bin:$PATH" WATCH_ROUNDS=1000000 $SHELL_CMD -c '. "$T/prelude.sh"; . "$0"' "$T/mod/dejank.sh" watch & )
+sleep 0.6
+expect "no budget yet during the first minutes" "$(cat "$CG/dejank/memory.min")" "max"
+rm -f "$RUN/watch.token"
+sleep 0.3
+
+# a group without the figures keeps full protection
+phone
+app com.android.systemui 100 5000
+ctl set pin 1 >/dev/null
+: >"$CG/dejank/memory.stat"
+echo max >"$CG/dejank/memory.min"
+ctl watch
+expect "no figures, no budget" "$(cat "$CG/dejank/memory.min")" "max"
 
 # a process that has only just started is moved, not restarted
 phone

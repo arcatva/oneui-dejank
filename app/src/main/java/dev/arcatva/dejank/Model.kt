@@ -67,9 +67,9 @@ enum class Fix(val key: String, val title: String, val summary: String, val help
         "System UI and Home are never compressed or dropped, so the panel and home screen don't reload.",
         "Under memory pressure Android compresses or drops parts of System UI and the launcher like " +
             "any other app. Opening the panel or going home then waits while they are read back.\n\n" +
-            "This moves both into a memory group the kernel may not reclaim or swap. They restart once " +
-            "so that all their memory starts inside the group.\n\n" +
-            "Cost: their memory, usually 0.6 to 1 GB, is never freed for other apps.",
+            "This moves both into a memory group the kernel may not swap, and may not reclaim what they " +
+            "use. They restart once so that all their memory starts inside the group.\n\n" +
+            "Cost: about 1 GB that is never freed for other apps.",
     ),
 }
 
