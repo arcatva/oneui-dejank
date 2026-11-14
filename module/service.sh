@@ -20,10 +20,15 @@ $D apply boot >/dev/null 2>&1
 want=$(sed -n 's/^versionCode=//p' "$MODDIR/module.prop")
 have=$(dumpsys package "$PKG" 2>/dev/null | sed -n 's/.*versionCode=\([0-9]*\).*/\1/p' | head -n 1)
 if [ -f "$MODDIR/dejank.apk" ] && [ "$have" != "$want" ]; then
-    cp "$MODDIR/dejank.apk" /data/local/tmp/dejank_install.apk &&
-        chmod 644 /data/local/tmp/dejank_install.apk &&
-        pm install -r -d --user 0 /data/local/tmp/dejank_install.apk >/dev/null 2>&1
-    rm -f /data/local/tmp/dejank_install.apk
+    tmp=/data/local/tmp/dejank_install.apk
+    if cp "$MODDIR/dejank.apk" "$tmp" && chmod 644 "$tmp"; then
+        case $(pm install -r -d --user 0 "$tmp" 2>&1) in *UPDATE_INCOMPATIBLE*)
+            pm uninstall "$PKG" >/dev/null 2>&1
+            pm install -r -d --user 0 "$tmp" >/dev/null 2>&1
+            ;;
+        esac
+    fi
+    rm -f "$tmp"
 fi
 
 sleep "${SETTLED_AFTER:-60}"

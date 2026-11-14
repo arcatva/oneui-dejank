@@ -8,6 +8,12 @@ if [ -f "$APK" ]; then
     out=failed
     if cp "$APK" "$TMP_APK" && chmod 644 "$TMP_APK"; then
         out=$(pm install -r -d --user 0 "$TMP_APK" 2>&1)
+        # a build signed with another key cannot update the app: replace it
+        case $out in *UPDATE_INCOMPATIBLE*)
+            pm uninstall dev.arcatva.dejank >/dev/null 2>&1
+            out=$(pm install -r -d --user 0 "$TMP_APK" 2>&1)
+            ;;
+        esac
     fi
     rm -f "$TMP_APK"
     case $out in
