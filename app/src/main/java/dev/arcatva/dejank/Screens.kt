@@ -148,7 +148,7 @@ fun ReadyScreen(
             } else if (!foreign && status.anyPending) {
                 Banner(
                     title = "Not applied yet",
-                    text = "The fixes that are switched on are not in effect.",
+                    text = "The fixes below are not in effect yet.",
                     button = "Apply",
                     busy = busy,
                     onClick = {
@@ -284,7 +284,7 @@ internal fun AboutCard(status: Status, appVersion: String, actions: Actions) {
             if (appVersion.isNotEmpty()) Fact("App", appVersion)
             Fact("Module", status.version.ifEmpty { "Unknown" })
         }
-        Hint("Everything here is undone by a reboot. Nothing is written to the system partitions.")
+        Hint("Nothing is written to the system partitions. Switching a fix off undoes it.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = actions.copyReport) { Text("Copy report") }
             TextButton(onClick = actions.openSource) { Text("Source") }

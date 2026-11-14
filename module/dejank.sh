@@ -296,7 +296,12 @@ pin_on() {
     pin_targets ask
     for t in $TARGETS; do pin_one "$t"; done
     log "pin: on, $TARGETS"
-    sh "$0" watch >/dev/null 2>&1 &
+    # the watcher has to outlive the command that started it
+    if command -v setsid >/dev/null 2>&1; then
+        setsid sh "$0" watch </dev/null >/dev/null 2>&1 &
+    else
+        nohup sh "$0" watch </dev/null >/dev/null 2>&1 &
+    fi
     return 0
 }
 
@@ -371,7 +376,9 @@ watch() {
         else
             [ -n "$WATCH_ONCE" ] && return 0
             sleep 20
-            pin_targets ask
+            # the default home app can change; asked every five minutes
+            i=$((i + 1))
+            if [ $((i % 15)) = 0 ]; then pin_targets ask; fi
         fi
     done
 }

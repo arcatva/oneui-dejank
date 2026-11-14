@@ -122,13 +122,20 @@ class ScreenshotTest {
     @Config(qualifiers = "w340dp-h1900dp-night-xhdpi")
     fun narrowLarge() = shoot("narrow_large", ready("gpu_state" to "err", "gpu_why" to "insmod", "gpu_was" to ""), fontScale = 1.3f)
 
+    /** Dialogs are windows of their own and are not in the picture, so these two only check that they open. */
     @Test
     @Config(qualifiers = "w412dp-h1250dp-night-xhdpi")
-    fun help() = shoot("help_pin", ready(), tap = "?", tapIndex = 2)
+    fun helpOpens() {
+        shoot("help_tapped", ready(), tap = "?", tapIndex = 2)
+        rule.onNodeWithText("OK").assertExists()
+    }
 
     @Test
     @Config(qualifiers = "w412dp-h1250dp-night-xhdpi")
-    fun confirmRestart() = shoot("confirm_restart", ready(*fresh), tap = "Apply")
+    fun applyAsksBeforeRestarting() {
+        shoot("apply_tapped", ready(*fresh), tap = "Apply")
+        rule.onNodeWithText("Restart System UI and Home?").assertExists()
+    }
 
     @Test
     @Config(qualifiers = "w412dp-h700dp-night-xhdpi")

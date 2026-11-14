@@ -43,7 +43,7 @@ enum class Tone { GOOD, IDLE, WAITING, BAD }
 enum class Fix(val key: String, val title: String, val summary: String, val help: String) {
     GPU(
         "gpu",
-        "GPU memory without waiting",
+        "No-wait GPU memory",
         "The graphics driver takes a smaller block of memory instead of stalling for a large one.",
         "When large free blocks run out, the Adreno driver makes the kernel free memory on the spot. " +
             "The thread drawing the frame waits, often for tens of milliseconds.\n\n" +
@@ -53,7 +53,7 @@ enum class Fix(val key: String, val title: String, val summary: String, val help
     ),
     RESERVE(
         "reserve",
-        "Larger free-memory reserve",
+        "More free memory",
         "Memory is freed in the background earlier, so apps rarely have to wait for it.",
         "Android keeps a small reserve of free memory. When an app uses it up faster than the " +
             "background reclaimer refills it, the app waits while memory is freed.\n\n" +
@@ -63,8 +63,8 @@ enum class Fix(val key: String, val title: String, val summary: String, val help
     ),
     PIN(
         "pin",
-        "System UI and Home stay in RAM",
-        "Never compressed or dropped, so the notification panel and home screen don't reload.",
+        "Keep the UI in RAM",
+        "System UI and Home are never compressed or dropped, so the panel and home screen don't reload.",
         "Under memory pressure Android compresses or drops parts of System UI and the launcher like " +
             "any other app. Opening the panel or going home then waits while they are read back.\n\n" +
             "This moves both into a memory group the kernel may not reclaim or swap. They restart once " +
