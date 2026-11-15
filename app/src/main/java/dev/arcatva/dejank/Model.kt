@@ -38,18 +38,21 @@ enum class FixState {
     }
 }
 
-/** How a state line is coloured. */
+/** How a state is coloured. */
 enum class Tone { GOOD, IDLE, WAITING, BAD }
 
-/** Text that lives in the resources: [id] filled in with [args]. */
-data class Line(val id: Int, val args: List<Any> = emptyList())
+/** Text that lives in the resources: [id] filled in with [args]. With a [quantity], [id] is a plural. */
+data class Line(val id: Int, val args: List<Any> = emptyList(), val quantity: Int? = null)
 
 fun lineOf(id: Int, vararg args: Any): Line = Line(id, args.toList())
 
+/** A plural: [quantity] picks the form and is its first argument. */
+fun countOf(id: Int, quantity: Int, vararg args: Any): Line = Line(id, listOf<Any>(quantity) + args, quantity)
+
 /** The two fixes that are one switch each. [key] is the name dejank.sh knows each by. */
-enum class Fix(val key: String, val switch: Int, val about: Int, val cost: Int) {
-    GPU("gpu", R.string.gpu_switch, R.string.gpu_about, R.string.gpu_cost),
-    RESERVE("reserve", R.string.reserve_switch, R.string.reserve_about, R.string.reserve_cost),
+enum class Fix(val key: String, val switch: Int, val about: Int) {
+    GPU("gpu", R.string.gpu_switch, R.string.gpu_about),
+    RESERVE("reserve", R.string.reserve_switch, R.string.reserve_about),
 }
 
 /**
@@ -97,7 +100,6 @@ data class Kept(
     val kb: Long? = null,
     /** Its floor: what is never reclaimed. Null while the process settles and everything is kept. */
     val minKb: Long? = null,
-    val settling: Boolean = false,
 ) {
     val active: Boolean get() = state == KeepState.ON || state == KeepState.WAIT
 
@@ -124,10 +126,6 @@ data class Status(
     val gpuWhy: String = "",
     /** The kernel series of this phone, e.g. android16-6.12; empty outside the series. */
     val gpuSeries: String = "",
-    /** The driver's own retry threshold, known once the module is loaded. */
-    val gpuWas: Int? = null,
-    val reserveNow: Int? = null,
-    val reserveStock: Int? = null,
     /** Why nothing can be kept in RAM here: "official" (Android does it itself), "controller", or empty. */
     val keepWhy: String = "",
     val memTotalKb: Long? = null,
@@ -162,33 +160,7 @@ data class Status(
         Tile.KEEP -> keptCount > 0
     }
 
-    /** Nothing to switch on here: counted neither as working nor as off. */
-    fun unavailable(tile: Tile): Boolean = when (tile) {
-        Tile.GPU -> state(Fix.GPU) == FixState.NA
-        Tile.RESERVE -> state(Fix.RESERVE) == FixState.NA
-        Tile.KEEP -> keepWhy.isNotEmpty()
-    }
-
-    /** Switched on, but nothing of it is in effect yet. */
-    fun pending(tile: Tile): Boolean = when (tile) {
-        Tile.GPU -> pending(Fix.GPU)
-        Tile.RESERVE -> pending(Fix.RESERVE)
-        Tile.KEEP -> keepWhy.isEmpty() && keptCount == 0 && keepPending
-    }
-
-    /** Off because that is how it was set: nothing wrong, nothing waiting. */
-    fun switchedOff(tile: Tile): Boolean = when (tile) {
-        Tile.GPU -> !wanted(Fix.GPU) && state(Fix.GPU) != FixState.NA
-        Tile.RESERVE -> !wanted(Fix.RESERVE) && state(Fix.RESERVE) != FixState.NA
-        Tile.KEEP -> keepWhy.isEmpty() && Keep.entries.none { kept(it).wanted }
-    }
-
     val working: Int get() = Tile.entries.count { on(it) }
-
-    val switchedOff: Int get() = Tile.entries.count { switchedOff(it) }
-
-    /** As right after installing: things are switched on and none of them is in effect. */
-    val nothingApplied: Boolean get() = !paused && working == 0 && Tile.entries.any { pending(it) }
 
     fun tone(fix: Fix): Tone = when (state(fix)) {
         FixState.ON -> Tone.GOOD
@@ -206,59 +178,31 @@ data class Status(
         }
     }
 
-    /** The state of one fix in a few words, with the numbers that show it. */
-    fun line(fix: Fix): Line {
-        val state = state(fix)
-        if (state == FixState.OFF) return lineOf(if (wanted(fix)) R.string.not_applied else R.string.off)
-        return when (fix) {
-            Fix.GPU -> when (state) {
-                FixState.ON -> {
-                    val was = gpuWas
-                    when {
-                        was == null -> lineOf(R.string.in_effect)
-                        was == 0 -> lineOf(R.string.gpu_on_never)
-                        else -> lineOf(R.string.gpu_on, was)
-                    }
-                }
-                FixState.NA -> when (gpuWhy) {
-                    "driver" -> lineOf(R.string.gpu_na_driver)
-                    "setting" -> lineOf(R.string.gpu_na_setting)
-                    else -> if (gpuSeries.isEmpty()) lineOf(R.string.gpu_na_kernel) else lineOf(R.string.gpu_na_series, gpuSeries)
-                }
-                else -> lineOf(R.string.gpu_err)
-            }
-
-            Fix.RESERVE -> when (state) {
-                FixState.ON -> {
-                    val now = reserveNow
-                    val stock = reserveStock
-                    when {
-                        now == null -> lineOf(R.string.in_effect)
-                        stock != null && stock < now -> lineOf(R.string.reserve_on, stock, now)
-                        else -> lineOf(R.string.reserve_on_plain, now)
-                    }
-                }
-                else -> lineOf(R.string.reserve_na)
+    /** What is wrong with a fix or what it waits for. Null when it is simply on or off. */
+    fun note(fix: Fix): Line? = when (state(fix)) {
+        FixState.ON -> null
+        FixState.OFF -> if (wanted(fix)) lineOf(R.string.not_applied) else null
+        FixState.ERR -> lineOf(if (fix == Fix.GPU) R.string.gpu_err else R.string.failed)
+        FixState.NA -> when (fix) {
+            Fix.RESERVE -> lineOf(R.string.reserve_na)
+            Fix.GPU -> when (gpuWhy) {
+                "driver" -> lineOf(R.string.gpu_na_driver)
+                "setting" -> lineOf(R.string.gpu_na_setting)
+                else -> if (gpuSeries.isEmpty()) lineOf(R.string.gpu_na_kernel) else lineOf(R.string.gpu_na_series, gpuSeries)
             }
         }
     }
 
-    fun line(keep: Keep): Line {
+    /** Next to a process's switch: how much of it is kept, or what it waits for. Null when there is nothing to say. */
+    fun value(keep: Keep): Line? {
         val k = kept(keep)
         return when (k.state) {
-            KeepState.ON -> {
-                val kb = k.keptKb
-                when {
-                    kb == null -> lineOf(R.string.kept_plain)
-                    k.settling -> lineOf(R.string.kept_settling, size(kb))
-                    else -> lineOf(R.string.kept_on, size(kb))
-                }
-            }
+            KeepState.ON -> k.keptKb?.let { lineOf(R.string.plain, size(it)) }
             KeepState.WAIT -> lineOf(R.string.kept_wait)
             KeepState.NONE -> lineOf(R.string.kept_none)
             // why is said once, above the switches
-            KeepState.NA -> lineOf(R.string.not_available)
-            KeepState.OFF -> lineOf(if (k.wanted) R.string.not_applied else R.string.off)
+            KeepState.NA -> null
+            KeepState.OFF -> if (k.wanted) lineOf(R.string.not_applied) else null
         }
     }
 
@@ -266,16 +210,21 @@ data class Status(
     fun keepReason(): Line =
         lineOf(if (keepWhy == "official") R.string.keep_na_official else R.string.keep_na_controller)
 
-    /** What a tile says under its name. */
+    private fun short(fix: Fix): Line = when (state(fix)) {
+        FixState.ON -> lineOf(R.string.on)
+        FixState.OFF -> lineOf(if (wanted(fix)) R.string.not_applied else R.string.off)
+        FixState.ERR -> lineOf(R.string.failed)
+        FixState.NA -> lineOf(if (fix == Fix.GPU && gpuWhy == "setting") R.string.not_needed else R.string.not_supported)
+    }
+
+    /** What a tile says under its name: a word, or for what is kept, how many and how much. */
     fun short(tile: Tile): Line = when (tile) {
-        Tile.GPU -> if (on(tile)) lineOf(R.string.gpu_short_on) else line(Fix.GPU)
-        Tile.RESERVE -> {
-            val now = reserveNow
-            if (on(tile) && now != null) lineOf(R.string.reserve_short_on, now) else line(Fix.RESERVE)
-        }
+        Tile.GPU -> short(Fix.GPU)
+        Tile.RESERVE -> short(Fix.RESERVE)
         Tile.KEEP -> when {
-            keepWhy.isNotEmpty() -> keepReason()
-            on(tile) -> lineOf(R.string.keep_short_on, size(keptKb))
+            keepWhy == "official" -> lineOf(R.string.built_in)
+            keepWhy.isNotEmpty() -> lineOf(R.string.not_supported)
+            on(tile) -> countOf(R.plurals.keep_short, keptCount, size(keptKb))
             keepPending -> lineOf(R.string.not_applied)
             else -> lineOf(R.string.off)
         }
@@ -316,19 +265,15 @@ fun parseStatus(text: String): Status? {
         states = Fix.entries.associateWith { FixState.parse(map[it.key + "_state"]) },
         gpuWhy = map["gpu_why"].orEmpty(),
         gpuSeries = map["gpu_series"].orEmpty(),
-        gpuWas = map["gpu_was"]?.toIntOrNull(),
-        reserveNow = map["reserve_now"]?.toIntOrNull(),
-        reserveStock = map["reserve_stock"]?.toIntOrNull(),
         keepWhy = map["keep_why"].orEmpty(),
         memTotalKb = map["mem_total_kb"]?.toLongOrNull(),
         kept = Keep.entries.associateWith { keep ->
-            val min = map[keep.key + "_min_kb"]
             Kept(
                 wanted = map[keep.key] == "1",
                 state = KeepState.parse(map[keep.key + "_state"]),
                 kb = map[keep.key + "_kb"]?.toLongOrNull(),
-                minKb = min?.toLongOrNull(),
-                settling = min == "max",
+                // "max" while the process settles: no floor yet, everything is kept
+                minKb = map[keep.key + "_min_kb"]?.toLongOrNull(),
             )
         },
     )

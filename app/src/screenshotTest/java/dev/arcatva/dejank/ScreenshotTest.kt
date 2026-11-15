@@ -142,6 +142,24 @@ class ScreenshotTest {
     @Config(qualifiers = "w412dp-h800dp-night-xhdpi")
     fun reserveDetail() = shoot("reserve_detail", ready(), open = Tile.RESERVE)
 
+    @Test
+    @Config(qualifiers = "zh-rCN-w412dp-h800dp-night-xhdpi")
+    fun gpuDetailChinese() = shoot("gpu_detail_zh", ready(), open = Tile.GPU)
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w412dp-h800dp-night-xhdpi")
+    fun reserveDetailChinese() = shoot("reserve_detail_zh", ready(), open = Tile.RESERVE)
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w412dp-h1000dp-night-xhdpi")
+    fun freshInstallChinese() = shoot("fresh_install_zh", ready(*fresh))
+
+    /** The kernel refused the module: the switch says so in one line. */
+    @Test
+    @Config(qualifiers = "w412dp-h800dp-night-xhdpi")
+    fun gpuDetailRefused() =
+        shoot("gpu_detail_refused", ready("gpu_state" to "err", "gpu_why" to "insmod", "gpu_was" to ""), open = Tile.GPU)
+
     /** An unfolded Fold: the tiles and one tile's details side by side. */
     @Test
     @Config(qualifiers = "w880dp-h1100dp-night-xhdpi")
@@ -195,7 +213,7 @@ class ScreenshotTest {
     @Config(qualifiers = "w412dp-h1000dp-night-xhdpi")
     fun applyAsksBeforeRestarting() {
         shoot("apply_tapped", ready(*fresh), tap = "Apply")
-        rule.onNodeWithText("Restart it now?").assertExists()
+        rule.onNodeWithText("Restart now?").assertExists()
     }
 
     @Test

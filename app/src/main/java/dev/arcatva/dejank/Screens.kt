@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -60,17 +59,17 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun Line.text(): String = stringResource(id, *args.toTypedArray())
+fun Line.text(): String {
+    val count = quantity ?: return stringResource(id, *args.toTypedArray())
+    return LocalContext.current.resources.getQuantityString(id, count, *args.toTypedArray())
+}
 
-/** "2 fixes are working. 1 is switched off." */
+/** Under the app's name: how many of the three are working. */
 @Composable
-fun headline(status: Status): String {
-    if (status.paused) return stringResource(R.string.headline_paused)
-    if (status.nothingApplied) return stringResource(R.string.headline_pending)
-    val resources = LocalContext.current.resources
-    val working = resources.getQuantityString(R.plurals.fixes_working, status.working, status.working)
-    val off = status.switchedOff
-    return if (off == 0) working else working + " " + resources.getQuantityString(R.plurals.fixes_off, off, off)
+fun headline(status: Status): String = when {
+    status.paused -> stringResource(R.string.headline_paused)
+    status.working == 0 -> stringResource(R.string.headline_none)
+    else -> LocalContext.current.resources.getQuantityString(R.plurals.fixes_working, status.working, status.working)
 }
 
 @Composable
@@ -235,7 +234,6 @@ private fun ColumnScope.Home(
     } else if (status.anyPending) {
         Banner(
             title = stringResource(R.string.pending_title),
-            text = stringResource(R.string.pending_text),
             button = stringResource(R.string.apply),
             busy = busy,
             onClick = { if (status.applyRestarts) ask(actions.apply) else actions.apply() },
@@ -268,13 +266,7 @@ private fun ColumnScope.Home(
             onClick = { onOpen(Tile.KEEP) },
             modifier = Modifier.fillMaxWidth(),
         ) {
-            if (status.keepWhy.isEmpty()) {
-                KeptBar(status)
-                Text(
-                    stringResource(R.string.keep_count, status.keptCount, Keep.entries.size),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
+            if (status.on(Tile.KEEP)) KeptBar(status)
         }
     }
 
@@ -289,23 +281,20 @@ private fun ColumnScope.Home(
             ) { Text(stringResource(choice.label)) }
         }
     }
-    Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = actions.copyReport) { Text(stringResource(R.string.copy_report)) }
-            TextButton(onClick = actions.openSource) { Text(stringResource(R.string.source)) }
-            Spacer(Modifier.weight(1f))
-            Text(
-                status.version.ifEmpty { appVersion },
-                Modifier.padding(end = 12.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.outline,
-            )
-        }
-        Hint(stringResource(R.string.undo_hint), Modifier.padding(horizontal = 12.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = actions.copyReport) { Text(stringResource(R.string.copy_report)) }
+        TextButton(onClick = actions.openSource) { Text(stringResource(R.string.source)) }
+        Spacer(Modifier.weight(1f))
+        Text(
+            status.version.ifEmpty { appVersion },
+            Modifier.padding(end = 12.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.outline,
+        )
     }
 }
 
-/** One tile: what the fix is called and, in a few words, how it stands. Tapping opens it. */
+/** One tile: what the fix is called and, in a word, how it stands. Tapping opens it. */
 @Composable
 internal fun TileCard(
     tile: Tile,
@@ -407,28 +396,27 @@ private fun ColumnScope.Detail(
     }
 }
 
+/** One switch and one sentence. */
 @Composable
 private fun ColumnScope.FixDetail(fix: Fix, status: Status, busy: Boolean, actions: Actions) {
     val usable = status.state(fix) != FixState.NA
-    Hint(stringResource(fix.about), Modifier.padding(horizontal = 8.dp))
     SwitchRow(
         title = stringResource(fix.switch),
-        role = null,
-        tone = status.tone(fix),
-        state = status.line(fix).text(),
+        summary = status.note(fix)?.text(),
+        summaryColor = status.tone(fix).color(),
         checked = usable && status.wanted(fix),
         enabled = usable && !busy,
         onToggle = { actions.set(fix.key, it) },
         shape = segment(0, 1),
     )
-    Cost(stringResource(fix.cost))
+    Hint(stringResource(fix.about), Modifier.padding(horizontal = 8.dp))
 }
 
+/** How much is kept, one sentence, and a switch per process. */
 @Composable
 private fun ColumnScope.KeepDetail(status: Status, busy: Boolean, ask: (() -> Unit) -> Unit, actions: Actions) {
-    Hint(stringResource(R.string.keep_about), Modifier.padding(horizontal = 8.dp))
     if (status.keepWhy.isNotEmpty()) {
-        StateLine(Tone.IDLE, status.keepReason().text(), Modifier.padding(horizontal = 8.dp))
+        Hint(status.keepReason().text(), Modifier.padding(horizontal = 8.dp))
     } else {
         val total = status.memTotalKb
         Surface(
@@ -437,43 +425,29 @@ private fun ColumnScope.KeepDetail(status: Status, busy: Boolean, ask: (() -> Un
             color = MaterialTheme.colorScheme.surfaceContainer,
         ) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
+                Row {
+                    Text(
+                        size(status.keptKb),
+                        Modifier.alignByBaseline(),
+                        style = MaterialTheme.typography.headlineSmall,
+                    )
                     if (total != null && total > 0) {
-                        stringResource(R.string.keep_total, size(status.keptKb), size(total))
-                    } else {
-                        stringResource(R.string.keep_short_on, size(status.keptKb))
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                )
+                        Spacer(Modifier.width(8.dp))
+                        Hint(stringResource(R.string.keep_of, size(total)), Modifier.alignByBaseline())
+                    }
+                }
                 KeptBar(status)
             }
         }
+        Hint(stringResource(R.string.keep_about), Modifier.padding(horizontal = 8.dp))
     }
-    KeepGroup(
-        title = stringResource(R.string.keep_apps),
-        hint = stringResource(R.string.keep_apps_hint),
-        keeps = Keep.entries.filter { it.restarts },
-        status = status,
-        busy = busy,
-        ask = ask,
-        actions = actions,
-    )
-    KeepGroup(
-        title = stringResource(R.string.keep_system),
-        hint = stringResource(R.string.keep_system_hint),
-        keeps = Keep.entries.filter { !it.restarts },
-        status = status,
-        busy = busy,
-        ask = ask,
-        actions = actions,
-    )
-    Cost(stringResource(R.string.keep_cost))
+    KeepGroup(stringResource(R.string.keep_apps), Keep.entries.filter { it.restarts }, status, busy, ask, actions)
+    KeepGroup(stringResource(R.string.keep_system), Keep.entries.filter { !it.restarts }, status, busy, ask, actions)
 }
 
 @Composable
 private fun KeepGroup(
     title: String,
-    hint: String,
     keeps: List<Keep>,
     status: Status,
     busy: Boolean,
@@ -481,19 +455,21 @@ private fun KeepGroup(
     actions: Actions,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-            Hint(hint)
-        }
+        Text(
+            title,
+            Modifier.padding(horizontal = 8.dp),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             keeps.forEachIndexed { i, keep ->
                 val kept = status.kept(keep)
                 val usable = kept.state != KeepState.NA && kept.state != KeepState.NONE
                 SwitchRow(
                     title = stringResource(keep.title),
-                    role = stringResource(keep.role),
-                    tone = status.tone(keep),
-                    state = status.line(keep).text(),
+                    summary = stringResource(keep.role),
+                    value = status.value(keep)?.text(),
+                    valueColor = status.tone(keep).color(),
                     checked = usable && kept.wanted,
                     enabled = usable && !busy,
                     onToggle = { on ->
@@ -506,17 +482,18 @@ private fun KeepGroup(
     }
 }
 
-/** One switch: what it is, what it is for, and its state with the numbers. */
+/** One switch: its name, one line under it, and at most a number or a word beside it. */
 @Composable
 internal fun SwitchRow(
     title: String,
-    role: String?,
-    tone: Tone,
-    state: String,
+    summary: String?,
     checked: Boolean,
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
     shape: Shape,
+    summaryColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    value: String? = null,
+    valueColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -524,29 +501,22 @@ internal fun SwitchRow(
         color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Row(
-            Modifier.padding(start = 20.dp, top = 14.dp, end = 16.dp, bottom = 14.dp),
+            Modifier
+                .heightIn(min = 72.dp)
+                .padding(start = 20.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
-                if (role != null) Hint(role)
-                StateLine(tone, state)
+                if (summary != null) Hint(summary, color = summaryColor)
             }
-            Spacer(Modifier.width(16.dp))
+            if (value != null) {
+                Spacer(Modifier.width(12.dp))
+                Text(value, style = MaterialTheme.typography.labelLarge, color = valueColor)
+            }
+            Spacer(Modifier.width(12.dp))
             Switch(checked = checked, onCheckedChange = onToggle, enabled = enabled)
         }
-    }
-}
-
-@Composable
-private fun Cost(text: String) {
-    Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            stringResource(R.string.what_it_costs),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Hint(text)
     }
 }
 
@@ -559,35 +529,19 @@ internal fun segment(index: Int, count: Int): Shape {
     return RoundedCornerShape(topStart = top, topEnd = top, bottomEnd = bottom, bottomStart = bottom)
 }
 
+/** Waiting and failed stand out; everything else is said quietly. */
 @Composable
-internal fun StateLine(tone: Tone, text: String, modifier: Modifier = Modifier) {
-    val scheme = MaterialTheme.colorScheme
-    val color = when (tone) {
-        Tone.GOOD -> scheme.primary
-        Tone.WAITING -> scheme.tertiary
-        Tone.BAD -> scheme.error
-        Tone.IDLE -> scheme.outline
-    }
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier
-                .size(8.dp)
-                .background(color, CircleShape),
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (tone == Tone.IDLE) scheme.onSurfaceVariant else scheme.onSurface,
-        )
-    }
+private fun Tone.color(): Color = when (this) {
+    Tone.WAITING -> MaterialTheme.colorScheme.tertiary
+    Tone.BAD -> MaterialTheme.colorScheme.error
+    Tone.GOOD, Tone.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 /** Something to do before the fixes work: apply after an install, resume after a failed start. */
 @Composable
 internal fun Banner(
     title: String,
-    text: String,
+    text: String? = null,
     button: String? = null,
     busy: Boolean = false,
     onClick: () -> Unit = {},
@@ -604,7 +558,7 @@ internal fun Banner(
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
-                Text(text, style = MaterialTheme.typography.bodyMedium)
+                if (text != null) Text(text, style = MaterialTheme.typography.bodyMedium)
             }
             if (button != null) {
                 Spacer(Modifier.width(12.dp))
