@@ -19,6 +19,7 @@ phone() {
         sleep 0.5
         rm -rf "$T/mod" "$DATA" "$RUN" "$PROC" "$VM" "$SYSMOD" "$CG" "$T/bin" "$T/pids" "$T/calls"
     }
+    rm -f "$T/dumpsys.out"
     mkdir -p "$T/mod/kmod" "$PROC/sys/kernel/random" "$VM" "$SYSMOD/msm_kgsl" "$CG/apps/uid_10056/pid_100" "$T/bin" "$T/pids"
     cp "$SRC"/*.sh "$SRC"/module.prop "$T/mod/"
     : >"$KO"
@@ -31,6 +32,7 @@ phone() {
         "ffffffc07e300000 b kgsl_pool_retry_min_order_x	[other]" \
         "$ADDR b kgsl_pool_retry_min_order	[msm_kgsl]" >"$PROC/kallsyms"
     echo "1000.50 900.00" >"$PROC/uptime"
+    printf '%s\n' "MemTotal:       11351040 kB" "MemFree:          383000 kB" >"$PROC/meminfo"
     echo 73 >"$VM/watermark_scale_factor"
     echo "memory" >"$CG/cgroup.controllers"
     : >"$CG/cgroup.subtree_control"
@@ -93,6 +95,7 @@ for d in "$@"; do
         echo max >"$d/memory.swap.max"
         echo 656683008 >"$d/memory.current"
         echo 0 >"$d/memory.swap.current"
+        printf '%s\n' "anon 300000000" "file 356683008" "shmem 0" "file_mapped 356683008" >"$d/memory.stat"
         : >"$d/cgroup.procs"
         ;;
     esac
@@ -100,7 +103,15 @@ done
 EOF
     printf '#!/bin/sh\necho 1\n' >"$T/bin/getprop"
     printf '#!/bin/sh\nexit 0\n' >"$T/bin/sync"
-    printf '#!/bin/sh\nexit 0\n' >"$T/bin/dumpsys"
+    printf '#!/bin/sh\ncat "$T/dumpsys.out" 2>/dev/null\nexit 0\n' >"$T/bin/dumpsys"
+    # the process list: pid and name
+    cat >"$T/bin/ps" <<'EOF'
+#!/bin/sh
+echo "PID NAME"
+for f in "$T"/pids/*; do
+    [ -f "$f" ] && echo "$(cat "$f") ${f##*/}"
+done
+EOF
     printf '#!/bin/sh\nexit 0\n' >"$T/bin/pm"
     chmod +x "$T"/bin/*
     # busybox ash runs its own mkdir, pidof, insmod... before it looks at PATH,
@@ -122,9 +133,9 @@ app() {
 ctl() {
     PATH="$T/bin:$PATH" $SHELL_CMD -c '. "$T/prelude.sh"; . "$0"' "$T/mod/dejank.sh" "$@"
     rc=$?
-    # "pin on" leaves a watcher behind; here it does two rounds and goes, and
-    # the checks wait for that so they never read a file it is writing
-    case "$1 $2 $3" in "set pin 1" | "set sys 1" | apply* | resume*) sleep 0.4 ;; esac
+    # switching something on leaves a watcher behind; here it does two rounds
+    # and goes, and the checks wait for that so they never read a file it is writing
+    case "$1 $3" in "set 1" | "apply "* | "resume "*) sleep 0.4 ;; esac
     return $rc
 }
 
@@ -144,18 +155,14 @@ logged() { if grep -q -- "$2" "$DATA/log" 2>/dev/null; then ok; else bad "$1 -> 
 # ---------------------------------------------------------- a fresh phone
 phone
 S=$(ctl status)
-has "api" "$S" "api=2"
+has "api" "$S" "api=3"
 has "version" "$S" "version=$(sed -n 's/^version=//p' "$SRC/module.prop")"
 has "build" "$S" "build=$(sed -n 's/^versionCode=//p' "$SRC/module.prop")"
 has "everything is wanted by default" "$S" "gpu=1"
 has "reserve wanted" "$S" "reserve=1"
-has "pin wanted" "$S" "pin=1"
 has "gpu not applied yet" "$S" "gpu_state=off"
 has "reserve not applied yet" "$S" "reserve_state=off"
 has "reserve shows the phone's value" "$S" "reserve_now=73"
-has "pin not applied yet" "$S" "pin_state=off"
-has "sys is off unless asked for" "$S" "sys=0"
-has "sys not applied" "$S" "sys_state=off"
 has "not paused" "$S" "paused=0"
 [ ! -e "$DATA/conf" ] && ok || bad "status saves nothing"
 
@@ -252,163 +259,251 @@ rm "$VM/watermark_scale_factor"
 has "no such setting" "$(ctl status)" "reserve_state=na"
 expect "cannot be switched on" "$(ctl set reserve 1)" "error=failed"
 
-# ---------------------------------------------------------- pin
+# ---------------------------------------------------------- kept in RAM
 phone
 echo "cpu io" >"$CG/cgroup.controllers"
-has "no memory controller" "$(ctl status)" "pin_state=na"
-expect "cannot be switched on" "$(ctl set pin 1)" "error=failed"
+S=$(ctl status)
+has "no memory controller" "$S" "ui_state=na"
+has "says why" "$S" "keep_why=controller"
+expect "cannot be switched on" "$(ctl set ui 1)" "error=failed"
+
+phone
+S=$(ctl status)
+has "System UI is wanted by default" "$S" "ui=1"
+has "the home app too" "$S" "home=1"
+has "nothing else is" "$S" "sf=0"
+has "composer off" "$S" "composer=0"
+has "allocator off" "$S" "alloc=0"
+has "system_server off" "$S" "server=0"
+has "nothing applied yet" "$S" "ui_state=off"
+has "RAM of the phone" "$S" "mem_total_kb=11351040"
+has "the home app is named" "$S" "home_app=com.sec.android.app.launcher"
+has "a system process that is not there cannot be kept" "$S" "composer_state=none"
 
 phone
 app com.android.systemui 100 5000
 app com.example.home 200 6000
-expect "pin on" "$(ctl set pin 1)" "ok=1"
+expect "System UI on" "$(ctl set ui 1)" "ok=1"
 expect "the controller is switched on at the root" "$(cat "$CG/cgroup.subtree_control")" "+memory"
-expect "never reclaimed" "$(cat "$CG/dejank/memory.min")" "max"
-expect "never swapped" "$(cat "$CG/dejank/memory.swap.max")" "0"
-called "System UI is restarted into the group" "kill 100"
-called "the default home app too" "kill 200"
-expect "the new processes are in the group" "$(sort "$CG/dejank/cgroup.procs" | tr '\n' ' ')" "101 201 "
-expect "the home app is remembered" "$(cat "$DATA/home")" "com.example.home"
+expect "fully protected while it settles" "$(cat "$CG/dejank-ui/memory.min")" "max"
+expect "never swapped" "$(cat "$CG/dejank-ui/memory.swap.max")" "0"
+called "System UI is restarted into its group" "kill 100"
+not_called "the home app is left alone" "kill 200"
+expect "the new process is in the group" "$(cat "$CG/dejank-ui/cgroup.procs")" "101"
+[ ! -d "$CG/dejank-home" ] && ok || bad "one switch made another group"
+expect "the switch is saved" "$(grep '^KEEP_UI=' "$DATA/conf")" "KEEP_UI=1"
+logged "it is logged" "keep ui: on"
 S=$(ctl status)
-has "pin is on" "$S" "pin_state=on"
-has "two apps run" "$S" "pin_apps=2"
-has "both are in" "$S" "pin_in=2"
-has "memory kept" "$S" "pin_kb=641292"
-has "nothing swapped" "$S" "pin_swap_kb=0"
+has "System UI is on" "$S" "ui_state=on"
+has "what its group holds" "$S" "ui_kb=641291"
+has "no floor yet" "$S" "ui_min_kb=max"
+has "the home app is not applied" "$S" "home_state=off"
 
-# a restarted app shows up outside the group; the watcher brings it in
+expect "the home app on" "$(ctl set home 1)" "ok=1"
+called "the default home app is restarted into its own group" "kill 200"
+expect "it is in its group" "$(cat "$CG/dejank-home/cgroup.procs")" "201"
+expect "the home app is remembered" "$(cat "$DATA/home")" "com.example.home"
+has "it is named" "$(ctl status)" "home_app=com.example.home"
+
+# a restarted app shows up outside its group; the watcher brings it in
 app com.example.home 300 99000
-has "one app is outside" "$(ctl status)" "pin_in=1"
-ctl watch
-has "the watcher moved it" "$(ctl status)" "pin_in=2"
+has "the new one is outside" "$(ctl status)" "home_state=wait"
+ctl watch keep
+has "the watcher moved it" "$(ctl status)" "home_state=on"
 not_called "without restarting it again" "kill 300"
 
-expect "pin off" "$(ctl set pin 0)" "ok=1"
-[ ! -d "$CG/dejank" ] && ok || bad "the group is removed"
-expect "back where it came from" "$(cat "$CG/apps/uid_10056/pid_100/cgroup.procs" | tr '\n' ' ')" ""
-expect "or to the root when that is gone" "$(sort "$CG/cgroup.procs" | tr '\n' ' ')" "101 201 300 "
+# the floor: what the process works with, without files nothing has mapped
+echo 800000000 >"$CG/dejank-ui/memory.current"
+printf '%s\n' "anon 400000000" "file 390000000" "kernel 10000000" "shmem 8000000" "file_mapped 282000000" >"$CG/dejank-ui/memory.stat"
+ctl watch keep
+expect "not before the process has settled" "$(cat "$CG/dejank-ui/memory.min")" "max"
+echo "1070.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "then usage less the unmapped file cache" "$(cat "$CG/dejank-ui/memory.min")" "683593K"
+S=$(ctl status)
+has "the floor is shown" "$S" "ui_min_kb=683593"
+has "next to what the group holds" "$S" "ui_kb=781250"
+echo 900000000 >"$CG/dejank-ui/memory.current"
+echo "1200.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "left alone for half an hour" "$(cat "$CG/dejank-ui/memory.min")" "683593K"
+echo "2900.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "then worked out again" "$(cat "$CG/dejank-ui/memory.min")" "781249K"
+# a process that came back is fully protected again until it has settled
+app com.android.systemui 500 289500
+ctl watch keep
+expect "a new process starts over" "$(cat "$CG/dejank-ui/memory.min")" "max"
+
+expect "System UI off" "$(ctl set ui 0)" "ok=1"
+[ ! -d "$CG/dejank-ui" ] && ok || bad "the group is removed"
+has "the home app stays on" "$(ctl status)" "home_state=on"
+expect "the controller stays while a group is left" "$(cat "$CG/cgroup.subtree_control")" "+memory"
+[ -f "$RUN/watch.token" ] && ok || bad "the watcher is stopped although a switch is on"
+expect "the home app off" "$(ctl set home 0)" "ok=1"
+expect "back where it came from, or to the root when that is gone" "$(sort "$CG/cgroup.procs" | tr '\n' ' ')" "101 201 300 500 "
 expect "the controller is switched off again" "$(cat "$CG/cgroup.subtree_control")" "-memory"
-has "pin is off" "$(ctl status)" "pin_state=off"
+[ ! -e "$RUN/watch.token" ] && ok || bad "the watcher is left running"
+logged "off is logged" "keep home: off"
 
 # a process that has only just started is moved, not restarted
 phone
 app com.android.systemui 100 99500
-echo "com.example.home" >"$T/pids/none"
-: >"$T/home.out"
-expect "pin on, young process" "$(ctl set pin 1)" "ok=1"
+expect "on, young process" "$(ctl set ui 1)" "ok=1"
 not_called "no restart" "kill"
-expect "moved" "$(cat "$CG/dejank/cgroup.procs")" "100"
+expect "moved" "$(cat "$CG/dejank-ui/cgroup.procs")" "100"
 expect "where it came from is noted" "$(cat "$RUN/origin.100")" "/apps/uid_10056/pid_100"
-ctl set pin 0 >/dev/null
+ctl set ui 0 >/dev/null
 expect "and it goes back there" "$(cat "$CG/apps/uid_10056/pid_100/cgroup.procs")" "100"
 
 # a controller that someone else switched on is not switched off
 phone
 echo "memory" >"$CG/cgroup.subtree_control"
-ctl set pin 1 >/dev/null
-ctl set pin 0 >/dev/null
+ctl set ui 1 >/dev/null
+ctl set ui 0 >/dev/null
 expect "left as found" "$(cat "$CG/cgroup.subtree_control")" "memory"
 
 # no default home app: Samsung's launcher
 phone
 printf '%s\n' "android/com.android.internal.app.ResolverActivity" >"$T/home.out"
 app com.sec.android.app.launcher 400 5000
-ctl set pin 1 >/dev/null
+ctl set home 1 >/dev/null
 called "falls back to One UI Home" "kill 400"
 
-# the watcher does nothing when pin is off
-phone
-ctl set pin 0 >/dev/null
-app com.android.systemui 100 5000
-ctl watch
-[ ! -d "$CG/dejank" ] && ok || bad "watcher with pin off made a group"
-
-# ---------------------------------------------------------- sys
-phone
-echo "cpu io" >"$CG/cgroup.controllers"
-has "no memory controller" "$(ctl status)" "sys_state=na"
-expect "cannot be switched on" "$(ctl set sys 1)" "error=failed"
-
-# server <pid>: a system_server that has run since boot, in Android's own group
-server() {
-    app system_server "$1" 300
-    mkdir -p "$CG/system/uid_1000/pid_$1"
-    : >"$CG/system/uid_1000/pid_$1/cgroup.procs"
-    echo "0::/system/uid_1000/pid_$1" >"$PROC/$1/cgroup"
+# the system processes: moved as they are, never restarted
+# native <name> <pid>: one that has run since boot, in Android's own group
+native() {
+    app "$1" "$2" 300
+    mkdir -p "$CG/system/uid_1000/pid_$2"
+    : >"$CG/system/uid_1000/pid_$2/cgroup.procs"
+    echo "0::/system/uid_1000/pid_$2" >"$PROC/$2/cgroup"
 }
 
 phone
-server 50
+native system_server 50
+native surfaceflinger 60
+native vendor.qti.hardware.display.composer-service 70
+native vendor.qti.hardware.display.allocator-service 80
+native android.hardware.audio.service 90
 app com.android.systemui 100 5000
-app com.example.home 200 6000
-expect "sys on" "$(ctl set sys 1)" "ok=1"
-expect "the controller is switched on at the root" "$(cat "$CG/cgroup.subtree_control")" "+memory"
-expect "never reclaimed" "$(cat "$CG/dejank-sys/memory.min")" "max"
-expect "never swapped" "$(cat "$CG/dejank-sys/memory.swap.max")" "0"
-expect "system_server is in its group" "$(cat "$CG/dejank-sys/cgroup.procs")" "50"
-expect "where it came from is noted" "$(cat "$RUN/origin.50")" "/system/uid_1000/pid_50"
-not_called "nothing is ever restarted for it" "kill"
-[ ! -d "$CG/dejank" ] && ok || bad "sys on applied pin as well"
-expect "the switch is saved" "$(grep '^SYS=' "$DATA/conf")" "SYS=1"
-logged "sys is logged" "sys: on"
 S=$(ctl status)
-has "sys is wanted" "$S" "sys=1"
-has "sys is on" "$S" "sys_state=on"
-has "system_server is in" "$S" "sys_in=1"
-has "memory kept" "$S" "sys_kb=641292"
-has "nothing swapped" "$S" "sys_swap_kb=0"
-has "pin is still not applied" "$S" "pin_state=off"
-
-# both on: each in its own group
-ctl set pin 1 >/dev/null
-expect "System UI and Home are in theirs" "$(sort "$CG/dejank/cgroup.procs" | tr '\n' ' ')" "101 201 "
-expect "system_server stays in its own" "$(cat "$CG/dejank-sys/cgroup.procs")" "50"
-not_called "and is not restarted" "kill 50"
+has "found: system_server" "$S" "server_state=off"
+has "found: the composer" "$S" "composer_state=off"
+has "found: the allocator" "$S" "alloc_state=off"
+for k in server sf composer alloc; do
+    expect "$k on" "$(ctl set $k 1)" "ok=1"
+done
+expect "system_server is in its group" "$(cat "$CG/dejank-server/cgroup.procs")" "50"
+expect "SurfaceFlinger in its own" "$(cat "$CG/dejank-sf/cgroup.procs")" "60"
+expect "the composer service is picked by its name" "$(cat "$CG/dejank-composer/cgroup.procs")" "70"
+expect "the allocator service too" "$(cat "$CG/dejank-alloc/cgroup.procs")" "80"
+expect "where each came from is noted" "$(cat "$RUN/origin.70")" "/system/uid_1000/pid_70"
+not_called "nothing is ever restarted for them" "kill"
+[ ! -d "$CG/dejank-ui" ] && ok || bad "a system switch applied System UI as well"
+S=$(ctl status)
+has "system_server is on" "$S" "server_state=on"
+has "the composer is on" "$S" "composer_state=on"
+has "System UI is still not applied" "$S" "ui_state=off"
+expect "saved" "$(grep '^KEEP_COMPOSER=' "$DATA/conf")" "KEEP_COMPOSER=1"
 
 # a system_server that came back is brought in by the watcher
-server 60
-has "the new one is outside" "$(ctl status)" "sys_in=0"
+native system_server 55
+has "the new one is outside" "$(ctl status)" "server_state=wait"
 ctl watch keep
-S=$(ctl status)
-has "the watcher moved it" "$S" "sys_in=1"
-has "and left the apps where they are" "$S" "pin_in=2"
-not_called "without restarting anything" "kill 60"
+has "the watcher moved it" "$(ctl status)" "server_state=on"
+not_called "without restarting anything" "kill"
+expect "system_server off" "$(ctl set server 0)" "ok=1"
+expect "back where it came from" "$(cat "$CG/system/uid_1000/pid_55/cgroup.procs")" "55"
+has "the others stay" "$(ctl status)" "sf_state=on"
 
-# switching one off leaves the other
-expect "pin off" "$(ctl set pin 0)" "ok=1"
-[ ! -d "$CG/dejank" ] && ok || bad "the pin group is removed"
-has "sys is still on" "$(ctl status)" "sys_state=on"
-expect "the controller stays while one group is left" "$(cat "$CG/cgroup.subtree_control")" "+memory"
-[ -f "$RUN/watch.token" ] && ok || bad "the watcher is stopped although sys is on"
-expect "sys off" "$(ctl set sys 0)" "ok=1"
-[ ! -d "$CG/dejank-sys" ] && ok || bad "the sys group is removed"
-expect "system_server is back where it came from" "$(cat "$CG/system/uid_1000/pid_60/cgroup.procs")" "60"
-expect "the controller is switched off again" "$(cat "$CG/cgroup.subtree_control")" "-memory"
-[ ! -e "$RUN/watch.token" ] && ok || bad "the watcher is left running"
-has "sys is off" "$(ctl status)" "sys_state=off"
-logged "sys off is logged" "sys: off"
-
-# at boot the watcher sets up what is switched on, system_server included
+# another chip: other names for the two vendor services
 phone
-server 50
-app com.android.systemui 100 99500
-mkdir -p "$DATA" && printf 'PIN=1\nSYS=1\n' >"$DATA/conf"
-ctl watch
-S=$(ctl status)
-has "boot: sys" "$S" "sys_state=on"
-has "boot: system_server is in" "$S" "sys_in=1"
-has "boot: pin" "$S" "pin_state=on"
-not_called "boot: system_server is not restarted" "kill 50"
+native android.hardware.graphics.composer@2.4-service 70
+native android.hardware.graphics.allocator-V2-service 80
+expect "composer by another name" "$(ctl set composer 1)" "ok=1"
+expect "allocator by another name" "$(ctl set alloc 1)" "ok=1"
+expect "the right one each" "$(cat "$CG/dejank-composer/cgroup.procs")$(cat "$CG/dejank-alloc/cgroup.procs")" "7080"
 
-# sys alone at boot
+# a phone without such a process
 phone
-server 50
+expect "nothing to keep" "$(ctl set composer 1)" "error=failed"
+[ ! -d "$CG/dejank-composer" ] && ok || bad "a group was left behind for a process that is not there"
+expect "the controller is not left on" "$(cat "$CG/cgroup.subtree_control")" "-memory"
+
+# Android 17 does this itself where SystemMemoryBudgetManager is at work
+phone
 app com.android.systemui 100 5000
-mkdir -p "$DATA" && printf 'PIN=0\nSYS=1\n' >"$DATA/conf"
+echo "SystemMemoryBudgetManager:" >"$T/dumpsys.out"
+mkdir -p "$CG/system" && echo 1073741824 >"$CG/system/memory.min"
+S=$(ctl status)
+has "Android keeps them itself" "$S" "keep_why=official"
+has "so the switches are not available" "$S" "ui_state=na"
+expect "and cannot be turned on" "$(ctl set ui 1)" "error=failed"
+[ ! -d "$CG/dejank-ui" ] && ok || bad "a group was made although Android does it itself"
+expect "apply leaves it alone as well" "$(ctl apply)" "ok=1"
+not_called "nothing is restarted" "kill"
+has "the other fixes still apply" "$(ctl status)" "reserve_state=on"
+expect "the answer is kept for this build" "$(cat "$DATA/official")" "1 1"
 ctl watch
-has "boot, sys only: on" "$(ctl status)" "sys_in=1"
-[ ! -d "$CG/dejank" ] && ok || bad "boot, sys only: made the pin group"
-not_called "boot, sys only: nothing restarted" "kill"
+[ ! -d "$CG/dejank-ui" ] && ok || bad "the watcher made a group although Android does it itself"
+
+# the service is there but has set no floors: not at work
+phone
+app com.android.systemui 100 5000
+echo "SystemMemoryBudgetManager:" >"$T/dumpsys.out"
+has "a service that does nothing does not count" "$(ctl status)" "keep_why="
+expect "so it can be turned on" "$(ctl set ui 1)" "ok=1"
+
+# floors someone set by hand do not count without the service
+phone
+mkdir -p "$CG/apps" && echo 734003200 >"$CG/apps/memory.min"
+echo "No dumpable named SystemMemoryBudgetManager" >"$T/dumpsys.out"
+has "no service, no official mechanism" "$(ctl status)" "keep_why="
+
+# at boot the watcher sets up what is switched on
+phone
+native system_server 50
+app com.android.systemui 100 99500
+app com.example.home 200 5000
+mkdir -p "$DATA" && printf 'KEEP_UI=1\nKEEP_HOME=0\nKEEP_SERVER=1\n' >"$DATA/conf" && echo "com.example.home" >"$DATA/home"
+ctl watch
+S=$(ctl status)
+has "boot: System UI" "$S" "ui_state=on"
+has "boot: system_server" "$S" "server_state=on"
+has "boot: what is off stays off" "$S" "home_state=off"
+not_called "boot: system_server is not restarted" "kill 50"
+not_called "boot: nor an app that is switched off" "kill 200"
+
+# the watcher applies nothing when everything is off
+phone
+mkdir -p "$DATA" && printf 'KEEP_UI=0\nKEEP_HOME=0\n' >"$DATA/conf"
+app com.android.systemui 100 5000
+ctl watch
+[ ! -d "$CG/dejank-ui" ] && ok || bad "watcher made a group with everything off"
+
+# settings and groups of the versions before
+phone
+app com.android.systemui 100 5000
+app com.example.home 200 6000
+native system_server 50
+mkdir -p "$DATA" && printf 'GPU=0\nRESERVE=0\nPIN=1\nSYS=1\n' >"$DATA/conf"
+S=$(ctl status)
+has "the old switch for both apps: System UI" "$S" "ui=1"
+has "and the home app" "$S" "home=1"
+has "the test build's switch" "$S" "server=1"
+mkdir "$CG/dejank" "$CG/dejank-sys"
+echo 100 >"$CG/dejank/cgroup.procs" && echo 200 >>"$CG/dejank/cgroup.procs" && echo 50 >"$CG/dejank-sys/cgroup.procs"
+echo "+memory" >"$CG/cgroup.subtree_control" && mkdir -p "$RUN" && : >"$RUN/pin.root"
+expect "apply" "$(ctl apply)" "ok=1"
+expect "System UI is restarted into its own group" "$(cat "$CG/dejank-ui/cgroup.procs")" "101"
+expect "the home app too" "$(cat "$CG/dejank-home/cgroup.procs")" "201"
+expect "system_server is moved" "$(cat "$CG/dejank-server/cgroup.procs")" "50"
+[ ! -d "$CG/dejank" ] && [ ! -d "$CG/dejank-sys" ] && ok || bad "an old group is left"
+expect "the controller stays on" "$(cat "$CG/cgroup.subtree_control")" "+memory"
+printf 'PIN=0\n' >"$DATA/conf"
+S=$(ctl status)
+has "the old switch, off" "$S" "ui=0"
+has "for both" "$S" "home=0"
 
 # ---------------------------------------------------------- start-up guard
 phone
@@ -428,13 +523,13 @@ has "paused" "$(ctl status)" "paused=1"
 logged "pause is logged" "paused: the last start did not finish"
 app com.android.systemui 100 5000
 ctl watch
-[ ! -d "$CG/dejank" ] && ok || bad "paused watcher made a group"
+[ ! -d "$CG/dejank-ui" ] && ok || bad "paused watcher made a group"
 expect "resume" "$(ctl resume)" "ok=1"
 S=$(ctl status)
 has "no longer paused" "$S" "paused=0"
 has "resume applies gpu" "$S" "gpu_state=on"
 has "resume applies reserve" "$S" "reserve_state=on"
-has "resume applies pin" "$S" "pin_state=on"
+has "resume applies what is kept in RAM" "$S" "ui_state=on"
 
 # ---------------------------------------------------------- apply
 phone
@@ -444,25 +539,22 @@ expect "apply at boot" "$(ctl apply boot)" "ok=1"
 S=$(ctl status)
 has "a fix that is off stays off" "$S" "gpu_state=off"
 has "reserve is applied" "$S" "reserve_state=on"
-has "pin is left to the watcher" "$S" "pin_state=off"
+has "what is kept in RAM is left to the watcher" "$S" "ui_state=off"
 expect "apply now" "$(ctl apply)" "ok=1"
-has "pin is applied" "$(ctl status)" "pin_state=on"
-has "sys stays off unless switched on" "$(ctl status)" "sys_state=off"
-ctl set sys 1 >/dev/null
-ctl set sys 0 >/dev/null
-printf 'GPU=0\nRESERVE=1\nPIN=1\nSYS=1\n' >"$DATA/conf"
-expect "apply with sys wanted" "$(ctl apply)" "ok=1"
-has "sys is applied" "$(ctl status)" "sys_state=on"
+S=$(ctl status)
+has "System UI is applied" "$S" "ui_state=on"
+has "what is off stays off" "$S" "sf_state=none"
 
 # ---------------------------------------------------------- settings file
 phone
 mkdir -p "$DATA"
-printf '%s\n' 'GPU=0' 'RESERVE=2' 'PIN=$(touch "$T/executed")' 'junk' 'EVIL=1; touch "$T/executed"' >"$DATA/conf"
+printf '%s\n' 'GPU=0' 'RESERVE=2' 'KEEP_UI=$(touch "$T/executed")' 'junk' 'EVIL=1; touch "$T/executed"' 'KEEP_SF=1' >"$DATA/conf"
 S=$(ctl status)
 has "a saved 0 is read" "$S" "gpu=0"
 has "anything but 0 or 1 is ignored" "$S" "reserve=1"
-has "a value that is a command is ignored" "$S" "pin=1"
-has "a missing key keeps its default" "$S" "sys=0"
+has "a value that is a command is ignored" "$S" "ui=1"
+has "a saved 1 is read" "$S" "sf=1"
+has "a missing key keeps its default" "$S" "server=0"
 [ ! -e "$T/executed" ] && ok || bad "something in the settings file was executed"
 expect "unknown switch" "$(ctl set blur 1)" "error=name"
 expect "unknown value" "$(ctl set gpu 2)" "error=value"
@@ -480,8 +572,8 @@ sleep 1
 S=$(ctl status)
 has "service: gpu" "$S" "gpu_state=on"
 has "service: reserve" "$S" "reserve_state=on"
-has "service: pin" "$S" "pin_state=on"
-has "service: both apps in" "$S" "pin_in=2"
+has "service: System UI" "$S" "ui_state=on"
+has "service: the home app" "$S" "home_state=on"
 [ ! -e "$DATA/starting" ] && ok || bad "service: the start settled"
 
 echo "$SHELL_CMD: $pass passed, $fail failed"

@@ -1,8 +1,8 @@
 #!/system/bin/sh
-# One UI Dejank: four memory fixes, each with its own switch.
+# One UI Dejank: memory fixes, each with its own switch.
 #
 #   sh dejank.sh status
-#   sh dejank.sh set <gpu|reserve|pin|sys> <0|1>
+#   sh dejank.sh set <name> <0|1>
 #   sh dejank.sh apply        everything that is switched on, now
 #   sh dejank.sh resume       after a start that did not finish
 #   sh dejank.sh log [lines]
@@ -11,9 +11,16 @@
 #          memory at once instead of waiting for a large one
 # reserve  vm.watermark_scale_factor = 300: memory is freed in the background
 #          earlier, so apps rarely have to wait for it
-# pin      System UI and Home live in their own memory group that is never
-#          reclaimed and never swapped
-# sys      system_server is moved into a second such group; off by default
+#
+# Kept in RAM, one switch and one memory group per process. A group is never
+# swapped, and what its process works with is never reclaimed:
+#   ui home                    System UI and the home app; on by default,
+#                              restarted once into their groups
+#   sf composer alloc server   SurfaceFlinger, the display composer and
+#                              graphics allocator services, system_server;
+#                              moved as they are
+# Android 17 can do this itself (SystemMemoryBudgetManager). Where it does,
+# these switches cannot be turned on.
 #
 # Nothing is written to /system or /vendor; a reboot undoes all of it.
 
@@ -27,8 +34,10 @@ CG=${CG:-/sys/fs/cgroup}
 RMDIR=${RMDIR:-rmdir}
 KILL=${KILL:-kill}
 NAP=${NAP:-0.1}
-GRP=$CG/dejank
-SGRP=$CG/dejank-sys
+KEEP="ui home sf composer alloc server"
+SETTLE=${SETTLE:-64}     # seconds a process is fully protected before its floor is worked out
+REFRESH=${REFRESH:-1800} # seconds between two looks at a floor
+FLOOR_PCT=100            # how much of what a process works with is kept
 CONF=$DATA/conf
 LOG=$DATA/log
 GUARD=$DATA/starting
@@ -37,7 +46,6 @@ WSF=$VM/watermark_scale_factor
 KPARAM=$SYSMOD/kgsl_nowait/parameters
 RESERVE_TARGET=300
 SYSTEMUI=com.android.systemui
-SERVER=system_server
 HOME_FALLBACK=com.sec.android.app.launcher
 
 is_num() {
@@ -53,27 +61,52 @@ log() {
     fi
 }
 
-# Only these four keys with 0 or 1 are read; nothing in the file is executed.
+# Only these keys with 0 or 1 are read; nothing in the file is executed.
 load_conf() {
     GPU=1
     RESERVE=1
-    PIN=1
-    SYS=0
+    K_ui=1
+    K_home=1
+    K_sf=0
+    K_composer=0
+    K_alloc=0
+    K_server=0
+    c_pin=
+    c_sys=
+    c_new=0
     [ -f "$CONF" ] || return 0
     while IFS='=' read -r k v || [ -n "$k" ]; do
         case $v in 0 | 1) ;; *) continue ;; esac
         case $k in
         GPU) GPU=$v ;;
         RESERVE) RESERVE=$v ;;
-        PIN) PIN=$v ;;
-        SYS) SYS=$v ;;
+        KEEP_UI) K_ui=$v && c_new=1 ;;
+        KEEP_HOME) K_home=$v && c_new=1 ;;
+        KEEP_SF) K_sf=$v && c_new=1 ;;
+        KEEP_COMPOSER) K_composer=$v && c_new=1 ;;
+        KEEP_ALLOC) K_alloc=$v && c_new=1 ;;
+        KEEP_SERVER) K_server=$v && c_new=1 ;;
+        PIN) c_pin=$v ;;
+        SYS) c_sys=$v ;;
         esac
     done <"$CONF"
+    # settings from before 0.2: one switch for System UI and Home together
+    if [ "$c_new" = 0 ]; then
+        if [ -n "$c_pin" ]; then K_ui=$c_pin && K_home=$c_pin; fi
+        if [ -n "$c_sys" ]; then K_server=$c_sys; fi
+    fi
     return 0
 }
 
 save_conf() {
-    printf 'GPU=%s\nRESERVE=%s\nPIN=%s\nSYS=%s\n' "$GPU" "$RESERVE" "$PIN" "$SYS" >"$CONF.tmp" && mv "$CONF.tmp" "$CONF"
+    printf 'GPU=%s\nRESERVE=%s\nKEEP_UI=%s\nKEEP_HOME=%s\nKEEP_SF=%s\nKEEP_COMPOSER=%s\nKEEP_ALLOC=%s\nKEEP_SERVER=%s\n' \
+        "$GPU" "$RESERVE" "$K_ui" "$K_home" "$K_sf" "$K_composer" "$K_alloc" "$K_server" >"$CONF.tmp" && mv "$CONF.tmp" "$CONF"
+}
+
+# wanted <key>: is this switch on in the settings?
+wanted() {
+    eval "w=\$K_$1"
+    [ "$w" = 1 ]
 }
 
 boot_id() {
@@ -228,46 +261,145 @@ reserve_off() {
     log "reserve: off, back to $stock"
 }
 
-# ----------------------------------------------------------------- pin
+# ---------------------------------------------------------------- keep
 
-pin_avail() {
+# KIB: a byte count in KiB. The shell on Android counts in 32 bits, so the
+# last three digits are dropped before any arithmetic.
+kib() {
+    KIB=
+    case $1 in '' | *[!0-9]*) return 1 ;; esac
+    case $1 in
+    ?????????????*) KIB=2000000000 ;;
+    ????*)
+        kb_=${1%???}
+        if [ "$kb_" -lt 17000000 ]; then KIB=$((kb_ * 125 / 128)); else KIB=$((kb_ / 128 * 125)); fi
+        ;;
+    *) KIB=0 ;;
+    esac
+    return 0
+}
+
+uptime_s() {
+    UP=$(cut -d. -f1 "$PROC/uptime" 2>/dev/null)
+    is_num "$UP" || UP=0
+}
+
+keep_avail() {
     grep -qw memory "$CG/cgroup.controllers" 2>/dev/null
 }
 
-# TARGETS: System UI and the default home app. "ask" also asks the package
-# manager, which is not there yet early in boot; without it the last answer is used.
-pin_targets() {
-    home=
-    if [ "$1" = ask ]; then
-        out=$(cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>/dev/null | tail -n 1)
-        case $out in */*) home=${out%%/*} ;; esac
-        case $home in '' | android | *[!a-zA-Z0-9._]*) home= ;; esac
-        [ -n "$home" ] && echo "$home" >"$DATA/home"
-    fi
-    [ -n "$home" ] || home=$(cat "$DATA/home" 2>/dev/null)
-    case $home in '' | *[!a-zA-Z0-9._]*) home=$HOME_FALLBACK ;; esac
-    TARGETS="$SYSTEMUI $home"
+# G: the memory group of key $1
+grp() {
+    G=$CG/dejank-$1
 }
 
-# Makes $1 a memory group that is never reclaimed and never swapped. It sits
-# directly under the root, where its protection is its own setting: no budget
-# from a parent, nothing shared with other apps.
+any_group() {
+    for a in $KEEP; do
+        [ -d "$CG/dejank-$a" ] && return 0
+    done
+    [ -d "$CG/dejank" ] || [ -d "$CG/dejank-sys" ]
+}
+
+# HOMEAPP: the default home app. "ask" also asks the package manager, which is
+# not there yet early in boot; without it the last answer is used.
+home_app() {
+    HOMEAPP=
+    if [ "$1" = ask ]; then
+        out=$(cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>/dev/null | tail -n 1)
+        case $out in */*) HOMEAPP=${out%%/*} ;; esac
+        case $HOMEAPP in '' | android | *[!a-zA-Z0-9._]*) HOMEAPP= ;; esac
+        [ -n "$HOMEAPP" ] && echo "$HOMEAPP" >"$DATA/home"
+    fi
+    [ -n "$HOMEAPP" ] || HOMEAPP=$(cat "$DATA/home" 2>/dev/null)
+    case $HOMEAPP in '' | *[!a-zA-Z0-9._]*) HOMEAPP=$HOME_FALLBACK ;; esac
+}
+
+# Prints the pids of the process behind key $1. The display composer and the
+# graphics allocator are vendor services whose names differ between chips, so
+# those two are picked out of the process list.
+keep_pids() {
+    case $1 in
+    ui) pidof "$SYSTEMUI" 2>/dev/null ;;
+    home)
+        [ -n "$HOMEAPP" ] || home_app
+        pidof "$HOMEAPP" 2>/dev/null
+        ;;
+    sf) pidof surfaceflinger 2>/dev/null ;;
+    server) pidof system_server 2>/dev/null ;;
+    composer | alloc)
+        [ -n "$PSOUT" ] || PSOUT=$(ps -A -o PID,NAME 2>/dev/null)
+        echo "$PSOUT" | while read -r p n; do
+            is_num "$p" || continue
+            case $1:$n in
+            composer:*hardware*composer*) echo "$p" ;;
+            alloc:*graphics.allocator* | alloc:*display.allocator*) echo "$p" ;;
+            esac
+        done
+        ;;
+    esac
+}
+
+# OFFICIAL: 1 when this Android keeps these processes in RAM itself, 0 when it
+# does not, empty while that cannot be told. Android 17 has a service for it,
+# SystemMemoryBudgetManager; where it is at work it has set a floor on
+# Android's own groups. The answer is kept for this build of the system.
+official_check() {
+    OFFICIAL=
+    out=$(dumpsys system_server_dumper --name SystemMemoryBudgetManager 2>&1 | head -n 1)
+    case $out in
+    "No dumpable named"*) OFFICIAL=0 ;;
+    '' | *"an't find service"* | *"oes not exist"*)
+        # no answer: system_server is not up yet, or this Android has no such thing
+        [ "$(getprop sys.boot_completed 2>/dev/null)" = 1 ] && OFFICIAL=0
+        ;;
+    *)
+        OFFICIAL=0
+        for a in system apps; do
+            v=$(cat "$CG/$a/memory.min" 2>/dev/null)
+            case $v in '' | 0) ;; *) OFFICIAL=1 ;; esac
+        done
+        ;;
+    esac
+    fp=$(getprop ro.build.fingerprint 2>/dev/null)
+    case $fp in '' | *' '*) return 0 ;; esac
+    [ -n "$OFFICIAL" ] && echo "$fp $OFFICIAL" >"$DATA/official"
+    return 0
+}
+
+official_known() {
+    OFFICIAL=
+    fp=$(getprop ro.build.fingerprint 2>/dev/null)
+    if [ -n "$fp" ] && [ -f "$DATA/official" ]; then
+        read -r c_fp c_v <"$DATA/official"
+        if [ "$c_fp" = "$fp" ]; then
+            case $c_v in 0 | 1) OFFICIAL=$c_v && return 0 ;; esac
+        fi
+    fi
+    official_check
+}
+
+# Makes $1 a memory group that is never swapped. It sits directly under the
+# root, where its protection is its own setting: no budget from a parent,
+# nothing shared with other apps. A new group is fully protected until the
+# floor of its process is worked out.
 grp_setup() {
-    pin_avail || return 1
+    keep_avail || return 1
     if ! grep -qw memory "$CG/cgroup.subtree_control" 2>/dev/null; then
         echo +memory >"$CG/cgroup.subtree_control" 2>/dev/null
         grep -qw memory "$CG/cgroup.subtree_control" 2>/dev/null || return 1
         : >"$RUN/pin.root"
     fi
-    [ -d "$1" ] || mkdir "$1" 2>/dev/null
+    if [ ! -d "$1" ]; then
+        mkdir "$1" 2>/dev/null
+        [ -f "$1/memory.min" ] && echo max >"$1/memory.min" 2>/dev/null
+    fi
     [ -f "$1/memory.min" ] || return 1
-    echo max >"$1/memory.min" 2>/dev/null
     echo 0 >"$1/memory.swap.max" 2>/dev/null
     return 0
 }
 
 # Sends everything in group $1 back where it came from and removes the group.
-# The memory controller is switched off again once neither group is left.
+# The memory controller is switched off again once no group is left.
 grp_drop() {
     if [ -d "$1" ]; then
         for q in $(cat "$1/cgroup.procs" 2>/dev/null); do
@@ -281,27 +413,37 @@ grp_drop() {
         done
         $RMDIR "$1" 2>/dev/null
     fi
-    if [ -f "$RUN/pin.root" ] && [ ! -d "$GRP" ] && [ ! -d "$SGRP" ]; then
+    if [ -f "$RUN/pin.root" ] && ! any_group; then
         echo -memory >"$CG/cgroup.subtree_control" 2>/dev/null
         rm -f "$RUN/pin.root"
     fi
     return 0
 }
 
-pin_setup() {
-    grp_setup "$GRP"
+# Versions before 0.2 kept System UI and Home in one group, and a test build
+# had one for system_server. Whatever is still in them goes back.
+legacy_drop() {
+    rm -f "$RUN/watch.pin" "$RUN/watch.sys"
+    grp_drop "$CG/dejank"
+    grp_drop "$CG/dejank-sys"
 }
 
-# in_group <pid> [group]
+# in_group <pid> <group>
 in_group() {
-    grep -qx "$1" "${2:-$GRP}/cgroup.procs" 2>/dev/null
+    grep -qx "$1" "$2/cgroup.procs" 2>/dev/null
 }
 
-# move <pid> [group]
+# move <pid> <group> <key>. A process that has only just arrived is fully
+# protected again until it has settled.
 move() {
     o=$(sed -n 's/^0:://p' "$PROC/$1/cgroup" 2>/dev/null | head -n 1)
-    case $o in '' | /dejank | /dejank-sys) ;; *) echo "$o" >"$RUN/origin.$1" ;; esac
-    echo "$1" >>"${2:-$GRP}/cgroup.procs" 2>/dev/null
+    case $o in '' | /dejank | /dejank-*) ;; *) echo "$o" >"$RUN/origin.$1" ;; esac
+    echo "$1" >>"$2/cgroup.procs" 2>/dev/null || return 1
+    echo max >"$2/memory.min" 2>/dev/null
+    uptime_s
+    echo "$UP" >"$RUN/since.$3"
+    rm -f "$RUN/floored.$3"
+    return 0
 }
 
 # AGE: seconds since process $1 started
@@ -316,14 +458,15 @@ age_of() {
     AGE=$((up - ${20} / 100))
 }
 
-# Moves the next process named $1 that is not one of $2, the moment it shows
-# up: memory it gets before the move stays outside the group. 15 s at most.
+# catch <name> <old pids> <group> <key>: moves the next process of that name
+# that is not one of the old ones, the moment it shows up; memory it gets
+# before the move stays outside the group. 15 s at most.
 catch() {
     c=0
     while [ "$c" -lt 150 ]; do
         for q in $(pidof "$1" 2>/dev/null); do
             case " $2 " in *" $q "*) continue ;; esac
-            move "$q"
+            move "$q" "$3" "$4"
             return 0
         done
         nap
@@ -332,24 +475,81 @@ catch() {
     return 1
 }
 
-# Android starts System UI and Home again by itself.
+# restart <name> <group> <key>. Android starts System UI and Home again by itself.
 restart() {
     r_old=$(pidof "$1" 2>/dev/null)
     # shellcheck disable=SC2086
     [ -n "$r_old" ] && $KILL -9 $r_old 2>/dev/null
-    catch "$1" "$r_old"
+    catch "$1" "$r_old" "$2" "$3"
 }
 
-# Whatever of $1 runs outside the group: move it if it has only just started,
-# restart it into the group otherwise.
-pin_one() {
-    p_old=0
-    for q in $(pidof "$1" 2>/dev/null); do
-        in_group "$q" && continue
-        age_of "$q"
-        if [ "$AGE" -lt 20 ]; then move "$q"; else p_old=1; fi
+# place <key>: brings the process behind a key into its group. An app that
+# runs outside it is moved if it has only just started and restarted into the
+# group otherwise; a system process is always moved as it is, so what it
+# already holds stays outside.
+place() {
+    grp "$1"
+    case $1 in
+    ui | home)
+        if [ "$1" = ui ]; then p_name=$SYSTEMUI; else p_name=$HOMEAPP; fi
+        p_old=0
+        for q in $(pidof "$p_name" 2>/dev/null); do
+            in_group "$q" "$G" && continue
+            age_of "$q"
+            if [ "$AGE" -lt 20 ]; then move "$q" "$G" "$1"; else p_old=1; fi
+        done
+        [ "$p_old" = 1 ] && restart "$p_name" "$G" "$1"
+        ;;
+    *)
+        for q in $(keep_pids "$1"); do
+            in_group "$q" "$G" || move "$q" "$G" "$1"
+        done
+        ;;
+    esac
+    return 0
+}
+
+# The floor of key $1: what its process works with, without the files it only
+# read once (file cache that nothing has mapped). Android 17 sizes its own
+# floors the same way; the rest of the group can be reclaimed like any memory.
+floor() {
+    grp "$1"
+    kib "$(cat "$G/memory.current" 2>/dev/null)" || return 1
+    f_cur=$KIB
+    f_file=0
+    f_shmem=0
+    f_mapped=0
+    while read -r k v; do
+        case $k in
+        file) kib "$v" && f_file=$KIB ;;
+        shmem) kib "$v" && f_shmem=$KIB ;;
+        file_mapped) kib "$v" && f_mapped=$KIB ;;
+        esac
+    done 2>/dev/null <"$G/memory.stat"
+    f_cache=$((f_file - f_shmem - f_mapped))
+    [ "$f_cache" -gt 0 ] || f_cache=0
+    f_keep=$((f_cur - f_cache))
+    [ "$f_keep" -gt 0 ] || f_keep=0
+    [ "$FLOOR_PCT" = 100 ] || f_keep=$((f_keep / 100 * FLOOR_PCT))
+    echo "${f_keep}K" >"$G/memory.min" 2>/dev/null
+}
+
+# Works out the floors that are due: first once a process has settled, then
+# every half hour.
+floors() {
+    uptime_s
+    for a in $KEEP; do
+        [ -f "$RUN/watch.$a" ] || continue
+        f_since=$(cat "$RUN/since.$a" 2>/dev/null)
+        is_num "$f_since" || continue
+        f_last=$(cat "$RUN/floored.$a" 2>/dev/null)
+        if is_num "$f_last"; then
+            [ $((UP - f_last)) -ge "$REFRESH" ] || continue
+        else
+            [ $((UP - f_since)) -ge "$SETTLE" ] || continue
+        fi
+        floor "$a" && echo "$UP" >"$RUN/floored.$a"
     done
-    [ "$p_old" = 1 ] && restart "$1"
     return 0
 }
 
@@ -363,167 +563,178 @@ watch_start() {
     fi
 }
 
-# The watcher stops looking after a group whose mark is gone, and goes when
-# neither is left.
-watch_stop() {
-    rm -f "$RUN/watch.$1"
-    [ -f "$RUN/watch.pin" ] || [ -f "$RUN/watch.sys" ] || rm -f "$RUN/watch.token"
+any_mark() {
+    for a in $KEEP; do
+        [ -f "$RUN/watch.$a" ] && return 0
+    done
+    return 1
 }
 
-pin_on() {
-    pin_setup || return 1
-    pin_targets ask
-    for t in $TARGETS; do pin_one "$t"; done
-    log "pin: on, $TARGETS"
-    watch_start
+# keep_on <key> [quiet]: "quiet" leaves starting the watcher to the caller
+keep_on() {
+    official_known
+    [ "$OFFICIAL" = 1 ] && return 1
+    grp "$1"
+    grp_setup "$G" || return 1
+    [ "$1" = home ] && home_app ask
+    PSOUT=
+    place "$1"
+    k_in=0
+    for q in $(keep_pids "$1"); do
+        in_group "$q" "$G" && k_in=1
+    done
+    case $1:$k_in in
+    ui:* | home:* | *:1) ;;
+    *)
+        # no such process on this phone
+        grp_drop "$G"
+        return 1
+        ;;
+    esac
+    : >"$RUN/watch.$1"
+    log "keep $1: on"
+    [ "$2" = quiet ] || watch_start
     return 0
 }
 
-pin_off() {
-    watch_stop pin
-    [ -d "$GRP" ] && log "pin: off"
-    grp_drop "$GRP"
+keep_off() {
+    rm -f "$RUN/watch.$1" "$RUN/since.$1" "$RUN/floored.$1"
+    any_mark || rm -f "$RUN/watch.token"
+    grp "$1"
+    [ -d "$G" ] && log "keep $1: off"
+    grp_drop "$G"
 }
 
-# PIN_STATE on/off/na, PIN_APPS: targets running, PIN_IN: of those, in the group
-pin_state() {
-    PIN_APPS=0
-    PIN_IN=0
-    PIN_KB=
-    PIN_SWAP_KB=
-    if ! pin_avail; then
-        PIN_STATE=na
+keep_drop_all() {
+    for d in $KEEP; do keep_off "$d"; done
+    legacy_drop
+}
+
+# keep_state <key>. KS: on, wait (the group is there, its process is not in it
+# yet), off, na (cannot be used here, see KEEP_WHY) or none (this phone has no
+# such process). KKB: what the group holds; KMIN: its floor, "max" while the
+# process settles.
+keep_state() {
+    KS=off
+    KKB=
+    KMIN=
+    if [ -n "$KEEP_WHY" ]; then
+        KS=na
         return 0
     fi
-    if [ ! -f "$GRP/memory.min" ]; then
-        PIN_STATE=off
-        return 0
-    fi
-    PIN_STATE=on
-    pin_targets
-    for t in $TARGETS; do
-        for q in $(pidof "$t" 2>/dev/null); do
-            PIN_APPS=$((PIN_APPS + 1))
-            in_group "$q" && PIN_IN=$((PIN_IN + 1))
-        done
+    grp "$1"
+    k_found=0
+    k_in=0
+    for q in $(keep_pids "$1"); do
+        k_found=1
+        in_group "$q" "$G" && k_in=1
     done
-    b=$(cat "$GRP/memory.current" 2>/dev/null)
-    is_num "$b" && PIN_KB=$((b / 1024))
-    b=$(cat "$GRP/memory.swap.current" 2>/dev/null)
-    is_num "$b" && PIN_SWAP_KB=$((b / 1024))
-}
-
-# ----------------------------------------------------------------- sys
-
-sys_move() {
-    for q in $(pidof "$SERVER" 2>/dev/null); do
-        in_group "$q" "$SGRP" || move "$q" "$SGRP"
-    done
-}
-
-# system_server cannot be restarted, so it is moved as it is: what it reads
-# from now on belongs to the group, what it already holds does not.
-sys_on() {
-    grp_setup "$SGRP" || return 1
-    sys_move
-    log "sys: on"
-    watch_start
-    return 0
-}
-
-sys_off() {
-    watch_stop sys
-    [ -d "$SGRP" ] && log "sys: off"
-    grp_drop "$SGRP"
-}
-
-# SYS_STATE on/off/na, SYS_IN: 1 when system_server is in its group
-sys_state() {
-    SYS_IN=0
-    SYS_KB=
-    SYS_SWAP_KB=
-    if ! pin_avail; then
-        SYS_STATE=na
+    if [ ! -f "$G/memory.min" ]; then
+        case $1:$k_found in ui:* | home:* | *:1) ;; *) KS=none ;; esac
         return 0
     fi
-    if [ ! -f "$SGRP/memory.min" ]; then
-        SYS_STATE=off
-        return 0
-    fi
-    SYS_STATE=on
-    for q in $(pidof "$SERVER" 2>/dev/null); do
-        in_group "$q" "$SGRP" && SYS_IN=1
-    done
-    b=$(cat "$SGRP/memory.current" 2>/dev/null)
-    is_num "$b" && SYS_KB=$((b / 1024))
-    b=$(cat "$SGRP/memory.swap.current" 2>/dev/null)
-    is_num "$b" && SYS_SWAP_KB=$((b / 1024))
+    if [ "$k_in" = 1 ]; then KS=on; else KS=wait; fi
+    kib "$(cat "$G/memory.current" 2>/dev/null)" && KKB=$KIB
+    v=$(cat "$G/memory.min" 2>/dev/null)
+    case $v in
+    max) KMIN=max ;;
+    *K) KMIN=${v%K} ;;
+    *) kib "$v" && KMIN=$KIB ;;
+    esac
     return 0
 }
 
 # ------------------------------------------------------------- watcher
 
-# Keeps what is switched on in its group, looking again every 20 s in case
-# something was restarted. At boot it also sets the groups up, early enough
-# to catch System UI and Home as they start. "keep" is how a switch starts
-# it: it only looks after the groups that are there, and applies nothing.
+# Keeps every process that is switched on in its group, looking again every
+# 20 s in case one was restarted, and works out the floors when they are due.
+# At boot it also sets the groups up, early enough to catch System UI and Home
+# as they start. "keep" is how a switch starts it: it only looks after the
+# groups that are there, and applies nothing.
 watch() {
     load_conf
     [ ! -f "$PAUSE" ] || return 0
-    w_pin=0
-    w_sys=0
-    if [ "$1" = keep ]; then
-        if [ "$PIN" = 1 ] && [ -f "$GRP/memory.min" ]; then w_pin=1; fi
-        if [ "$SYS" = 1 ] && [ -f "$SGRP/memory.min" ]; then w_sys=1; fi
-    else
-        if [ "$PIN" = 1 ] && pin_setup; then w_pin=1; fi
-        if [ "$SYS" = 1 ] && grp_setup "$SGRP"; then w_sys=1; fi
+    if [ "$1" != keep ]; then
+        # only once it is known whether this Android does the same itself
+        official_known
+        o_wait=0
+        while [ -z "$OFFICIAL" ] && [ "$o_wait" -lt "${OFFICIAL_WAIT:-300}" ]; do
+            sleep 1
+            official_check
+            o_wait=$((o_wait + 1))
+        done
+        if [ "$OFFICIAL" = 1 ]; then
+            keep_drop_all
+            return 0
+        fi
+        home_app
+        for d in $KEEP; do
+            wanted "$d" || continue
+            grp "$d"
+            grp_setup "$G" || continue
+            : >"$RUN/watch.$d"
+            PSOUT=
+            place "$d"
+        done
+        legacy_drop
     fi
-    [ "$w_pin$w_sys" != 00 ] || return 0
+    any_mark || return 0
     token=$$
     echo "$token" >"$RUN/watch.token"
-    TARGETS=
-    if [ "$w_sys" = 1 ]; then
-        : >"$RUN/watch.sys"
-        sys_move
-    fi
-    if [ "$w_pin" = 1 ]; then
-        : >"$RUN/watch.pin"
-        pin_targets
-        if [ "$1" != keep ]; then
-            for t in $TARGETS; do pin_one "$t"; done
-        fi
-    fi
+    home_app
     i=0
     while [ "$(cat "$RUN/watch.token" 2>/dev/null)" = "$token" ]; do
-        if [ -f "$RUN/watch.pin" ]; then
-            for t in $TARGETS; do
-                for q in $(pidof "$t" 2>/dev/null); do in_group "$q" || move "$q"; done
+        any_mark || return 0
+        w_fast=0
+        [ "$i" -lt "${WATCH_ROUNDS:-900}" ] && w_fast=1
+        PSOUT=
+        for d in $KEEP; do
+            [ -f "$RUN/watch.$d" ] || continue
+            # only the two apps start during boot; the rest is looked at every 20 s
+            case $d:$w_fast in ui:* | home:* | *:0) ;; *) [ $((i % 25)) = 0 ] || continue ;; esac
+            grp "$d"
+            [ -f "$G/cgroup.procs" ] || continue
+            for q in $(keep_pids "$d"); do
+                in_group "$q" "$G" || move "$q" "$G" "$d"
             done
-        fi
-        if [ -f "$RUN/watch.sys" ]; then sys_move; fi
-        if [ "$i" -lt "${WATCH_ROUNDS:-900}" ]; then
+        done
+        if [ "$w_fast" = 1 ]; then
+            [ $((i % 25)) = 0 ] && floors
             i=$((i + 1))
             sleep "${WATCH_FAST:-0.2}" 2>/dev/null || sleep 1
         else
+            floors
             [ -n "$WATCH_ONCE" ] && return 0
             sleep 20
             # the default home app can change; asked every five minutes
             i=$((i + 1))
-            if [ "$w_pin" = 1 ] && [ $((i % 15)) = 0 ]; then pin_targets ask; fi
+            [ $((i % 15)) = 0 ] && home_app ask
         fi
     done
 }
 
 # ------------------------------------------------------------ commands
 
-# "boot" leaves pin and sys to the watcher, which service.sh starts before this.
+# "boot" leaves what is kept in RAM to the watcher, which service.sh starts
+# before this.
 apply() {
     load_conf
     if [ "$GPU" = 1 ]; then gpu_on; fi
     if [ "$RESERVE" = 1 ]; then reserve_on; fi
-    if [ "$PIN" = 1 ] && [ "$1" != boot ]; then pin_on; fi
-    if [ "$SYS" = 1 ] && [ "$1" != boot ]; then sys_on; fi
+    [ "$1" = boot ] && return 0
+    official_check
+    [ -n "$OFFICIAL" ] || official_known
+    if [ "$OFFICIAL" = 1 ]; then
+        keep_drop_all
+        return 0
+    fi
+    # a watcher of an older version would put the apps back into its own group
+    any_group && echo stop >"$RUN/watch.token"
+    for d in $KEEP; do
+        if wanted "$d"; then keep_on "$d" quiet; fi
+    done
+    legacy_drop
+    any_mark && watch_start
     return 0
 }
 
@@ -531,11 +742,13 @@ status() {
     load_conf
     gpu_state
     reserve_state
-    pin_state
-    sys_state
+    official_known
+    KEEP_WHY=
+    keep_avail || KEEP_WHY=controller
+    [ "$OFFICIAL" = 1 ] && KEEP_WHY=official
     paused=0
     [ -f "$PAUSE" ] && paused=1
-    echo "api=2"
+    echo "api=3"
     echo "version=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)"
     echo "build=$(sed -n 's/^versionCode=//p' "$MODDIR/module.prop" 2>/dev/null)"
     echo "paused=$paused"
@@ -548,17 +761,18 @@ status() {
     echo "reserve_state=$RES_STATE"
     echo "reserve_now=$RES_NOW"
     echo "reserve_stock=$RES_STOCK"
-    echo "pin=$PIN"
-    echo "pin_state=$PIN_STATE"
-    echo "pin_apps=$PIN_APPS"
-    echo "pin_in=$PIN_IN"
-    echo "pin_kb=$PIN_KB"
-    echo "pin_swap_kb=$PIN_SWAP_KB"
-    echo "sys=$SYS"
-    echo "sys_state=$SYS_STATE"
-    echo "sys_in=$SYS_IN"
-    echo "sys_kb=$SYS_KB"
-    echo "sys_swap_kb=$SYS_SWAP_KB"
+    echo "keep_why=$KEEP_WHY"
+    echo "mem_total_kb=$(sed -n 's/^MemTotal: *\([0-9]*\) kB$/\1/p' "$PROC/meminfo" 2>/dev/null)"
+    home_app
+    echo "home_app=$HOMEAPP"
+    for d in $KEEP; do
+        eval "w=\$K_$d"
+        keep_state "$d"
+        echo "$d=$w"
+        echo "${d}_state=$KS"
+        echo "${d}_kb=$KKB"
+        echo "${d}_min_kb=$KMIN"
+    done
 }
 
 mkdir -p "$DATA" "$RUN" 2>/dev/null
@@ -569,14 +783,15 @@ set)
     load_conf
     case $3 in 0 | 1) ;; *) echo "error=value" && exit 1 ;; esac
     case $2 in
-    gpu) GPU=$3 ;;
-    reserve) RESERVE=$3 ;;
-    pin) PIN=$3 ;;
-    sys) SYS=$3 ;;
+    gpu) GPU=$3 && fn=gpu ;;
+    reserve) RESERVE=$3 && fn=reserve ;;
+    ui | home | sf | composer | alloc | server) eval "K_$2=\$3" && fn="keep" ;;
     *) echo "error=name" && exit 1 ;;
     esac
     save_conf
-    if "${2}_$([ "$3" = 1 ] && echo on || echo off)"; then echo "ok=1"; else echo "error=failed" && exit 1; fi
+    if [ "$3" = 1 ]; then fn=${fn}_on; else fn=${fn}_off; fi
+    if [ "$fn" = keep_on ] || [ "$fn" = keep_off ]; then set -- "$2"; else set --; fi
+    if "$fn" "$@"; then echo "ok=1"; else echo "error=failed" && exit 1; fi
     ;;
 apply)
     apply "$2"
@@ -605,7 +820,7 @@ guard)
 settled) rm -f "$GUARD" ;;
 log) tail -n "${2:-50}" "$LOG" 2>/dev/null ;;
 *)
-    echo "usage: dejank.sh status | set <gpu|reserve|pin|sys> <0|1> | apply | resume | log [lines]"
+    echo "usage: dejank.sh status | set <gpu|reserve|ui|home|sf|composer|alloc|server> <0|1> | apply | resume | log [lines]"
     exit 1
     ;;
 esac
