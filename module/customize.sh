@@ -21,4 +21,6 @@ if [ -f "$APK" ]; then
     *) ui_print "! App not installed ($out). Install $APK by hand." ;;
     esac
 fi
+# an update takes over what the version before it keeps in RAM
+sh "$MODPATH/dejank.sh" takeover >/dev/null 2>&1 || true
 ui_print "- Give Dejank root, open it and tap Apply. No reboot needed."

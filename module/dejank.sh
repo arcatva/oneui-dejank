@@ -12,15 +12,29 @@
 # reserve  vm.watermark_scale_factor = 300: memory is freed in the background
 #          earlier, so apps rarely have to wait for it
 #
-# Kept in RAM, one switch and one memory group per process. A group is never
-# swapped, and what its process works with is never reclaimed:
+# Kept in RAM, one switch and one memory group per process:
 #   ui home                    System UI and the home app; on by default,
 #                              restarted once into their groups
 #   sf composer alloc server   SurfaceFlinger, the display composer and
 #                              graphics allocator services, system_server;
 #                              moved as they are
-# Android 17 can do this itself (SystemMemoryBudgetManager). Where it does,
-# these switches cannot be turned on.
+# Each group gets a floor the kernel does not reclaim below. The rules are
+# those of Android's SystemMemoryBudgetManager as its documentation gives them
+# (source.android.com, "System memory budgets"; its source is not public yet):
+#   - a floor is nine tenths of what the process holds, without the file cache
+#     nothing has mapped
+#   - all floors are worked out together, 1, 4, 16 and 64 s after the start and
+#     every half hour after that; the start is the watcher's, as it is the
+#     service's after boot there
+#   - together they hold at most a tenth of the RAM; when they would hold more,
+#     every floor shrinks by the same factor
+#   - swap is left as the system has it
+#   - 10 s after boot has completed, the file cache nothing has mapped is asked
+#     back from system_server's group, once
+# Android writes a floor at three levels of its own groups because a parent
+# caps its children. A group here has no parent but the root, so one write
+# does the same. Where Android runs that service itself, these switches cannot
+# be turned on.
 #
 # Nothing is written to /system or /vendor; a reboot undoes all of it.
 
@@ -35,9 +49,10 @@ RMDIR=${RMDIR:-rmdir}
 KILL=${KILL:-kill}
 NAP=${NAP:-0.1}
 KEEP="ui home sf composer alloc server"
-SETTLE=${SETTLE:-64}     # seconds a process is fully protected before its floor is worked out
-REFRESH=${REFRESH:-1800} # seconds between two looks at a floor
-FLOOR_PCT=100            # how much of what a process works with is kept
+SETTLE=${SETTLE:-"1 4 16 64"} # seconds after the start at which the floors are worked out
+REFRESH=${REFRESH:-1800}      # and seconds between two looks after that
+FLOOR_PCT=90                  # how much of what a process works with is kept
+CAP_PCT=10                    # all floors together, in percent of the RAM
 CONF=$DATA/conf
 LOG=$DATA/log
 GUARD=$DATA/starting
@@ -279,9 +294,26 @@ kib() {
     return 0
 }
 
+# VAL: the first line of file $1, read without starting a program
+first() {
+    VAL=
+    [ -f "$1" ] && read -r VAL 2>/dev/null <"$1"
+    return 0
+}
+
 uptime_s() {
-    UP=$(cut -d. -f1 "$PROC/uptime" 2>/dev/null)
+    first "$PROC/uptime"
+    UP=${VAL%%.*}
     is_num "$UP" || UP=0
+}
+
+# MEMKB: the RAM of this phone in kB
+mem_total() {
+    MEMKB=
+    while read -r m_k m_v _; do
+        [ "$m_k" = MemTotal: ] && MEMKB=$m_v && break
+    done 2>/dev/null <"$PROC/meminfo"
+    is_num "$MEMKB" || MEMKB=
 }
 
 keep_avail() {
@@ -291,6 +323,18 @@ keep_avail() {
 # G: the memory group of key $1
 grp() {
     G=$CG/dejank-$1
+}
+
+# has_proc <group>: a process is in it. The kernel takes a process that ended
+# off the list, so a group that still has one needs no look at the process list.
+has_proc() {
+    first "$1/cgroup.procs"
+    [ -n "$VAL" ]
+}
+
+# PSOUT: the process list, taken once for both vendor services
+ps_list() {
+    [ -n "$PSOUT" ] || PSOUT=$(ps -A -o PID,NAME 2>/dev/null)
 }
 
 any_group() {
@@ -327,7 +371,7 @@ keep_pids() {
     sf) pidof surfaceflinger 2>/dev/null ;;
     server) pidof system_server 2>/dev/null ;;
     composer | alloc)
-        [ -n "$PSOUT" ] || PSOUT=$(ps -A -o PID,NAME 2>/dev/null)
+        ps_list
         echo "$PSOUT" | while read -r p n; do
             is_num "$p" || continue
             case $1:$n in
@@ -337,6 +381,12 @@ keep_pids() {
         done
         ;;
     esac
+}
+
+# PIDS: the same, with the process list taken once for both vendor services
+pids_of() {
+    case $1 in composer | alloc) ps_list ;; esac
+    PIDS=$(keep_pids "$1")
 }
 
 # OFFICIAL: 1 when this Android keeps these processes in RAM itself, 0 when it
@@ -378,10 +428,11 @@ official_known() {
     official_check
 }
 
-# Makes $1 a memory group that is never swapped. It sits directly under the
-# root, where its protection is its own setting: no budget from a parent,
-# nothing shared with other apps. A new group is fully protected until the
-# floor of its process is worked out.
+# Makes $1 a memory group. It sits directly under the root, where its
+# protection is its own setting: no budget from a parent, nothing shared with
+# other apps. It has no floor until the floors are worked out, a second after
+# the watcher starts. Swap is as the system has it; versions before this one
+# had switched it off for the group.
 grp_setup() {
     keep_avail || return 1
     if ! grep -qw memory "$CG/cgroup.subtree_control" 2>/dev/null; then
@@ -389,12 +440,9 @@ grp_setup() {
         grep -qw memory "$CG/cgroup.subtree_control" 2>/dev/null || return 1
         : >"$RUN/pin.root"
     fi
-    if [ ! -d "$1" ]; then
-        mkdir "$1" 2>/dev/null
-        [ -f "$1/memory.min" ] && echo max >"$1/memory.min" 2>/dev/null
-    fi
+    [ -d "$1" ] || mkdir "$1" 2>/dev/null
     [ -f "$1/memory.min" ] || return 1
-    echo 0 >"$1/memory.swap.max" 2>/dev/null
+    echo max >"$1/memory.swap.max" 2>/dev/null
     return 0
 }
 
@@ -433,17 +481,12 @@ in_group() {
     grep -qx "$1" "$2/cgroup.procs" 2>/dev/null
 }
 
-# move <pid> <group> <key>. A process that has only just arrived is fully
-# protected again until it has settled.
+# move <pid> <group>. The group keeps the floor it has until the floors are
+# next worked out.
 move() {
     o=$(sed -n 's/^0:://p' "$PROC/$1/cgroup" 2>/dev/null | head -n 1)
     case $o in '' | /dejank | /dejank-*) ;; *) echo "$o" >"$RUN/origin.$1" ;; esac
-    echo "$1" >>"$2/cgroup.procs" 2>/dev/null || return 1
-    echo max >"$2/memory.min" 2>/dev/null
-    uptime_s
-    echo "$UP" >"$RUN/since.$3"
-    rm -f "$RUN/floored.$3"
-    return 0
+    echo "$1" >>"$2/cgroup.procs" 2>/dev/null
 }
 
 # AGE: seconds since process $1 started
@@ -458,7 +501,7 @@ age_of() {
     AGE=$((up - ${20} / 100))
 }
 
-# catch <name> <old pids> <group> <key>: moves the next process of that name
+# catch <name> <old pids> <group>: moves the next process of that name
 # that is not one of the old ones, the moment it shows up; memory it gets
 # before the move stays outside the group. 15 s at most.
 catch() {
@@ -466,7 +509,7 @@ catch() {
     while [ "$c" -lt 150 ]; do
         for q in $(pidof "$1" 2>/dev/null); do
             case " $2 " in *" $q "*) continue ;; esac
-            move "$q" "$3" "$4"
+            move "$q" "$3"
             return 0
         done
         nap
@@ -475,12 +518,12 @@ catch() {
     return 1
 }
 
-# restart <name> <group> <key>. Android starts System UI and Home again by itself.
+# restart <name> <group>. Android starts System UI and Home again by itself.
 restart() {
     r_old=$(pidof "$1" 2>/dev/null)
     # shellcheck disable=SC2086
     [ -n "$r_old" ] && $KILL -9 $r_old 2>/dev/null
-    catch "$1" "$r_old" "$2" "$3"
+    catch "$1" "$r_old" "$2"
 }
 
 # place <key>: brings the process behind a key into its group. An app that
@@ -496,66 +539,137 @@ place() {
         for q in $(pidof "$p_name" 2>/dev/null); do
             in_group "$q" "$G" && continue
             age_of "$q"
-            if [ "$AGE" -lt 20 ]; then move "$q" "$G" "$1"; else p_old=1; fi
+            if [ "$AGE" -lt 20 ]; then move "$q" "$G"; else p_old=1; fi
         done
-        [ "$p_old" = 1 ] && restart "$p_name" "$G" "$1"
+        [ "$p_old" = 1 ] && restart "$p_name" "$G"
         ;;
     *)
-        for q in $(keep_pids "$1"); do
-            in_group "$q" "$G" || move "$q" "$G" "$1"
+        pids_of "$1"
+        for q in $PIDS; do
+            in_group "$q" "$G" || move "$q" "$G"
         done
         ;;
     esac
     return 0
 }
 
-# The floor of key $1: what its process works with, without the files it only
-# read once (file cache that nothing has mapped). Android 17 sizes its own
-# floors the same way; the rest of the group can be reclaimed like any memory.
-floor() {
-    grp "$1"
-    kib "$(cat "$G/memory.current" 2>/dev/null)" || return 1
-    f_cur=$KIB
-    f_file=0
-    f_shmem=0
-    f_mapped=0
+# UNMAPPED: the file cache in group $1 that nothing has mapped, in KiB: what a
+# process read or wrote once and does not hold on to.
+unmapped() {
+    u_file=0
+    u_shmem=0
+    u_mapped=0
     while read -r k v; do
         case $k in
-        file) kib "$v" && f_file=$KIB ;;
-        shmem) kib "$v" && f_shmem=$KIB ;;
-        file_mapped) kib "$v" && f_mapped=$KIB ;;
+        file) kib "$v" && u_file=$KIB ;;
+        shmem) kib "$v" && u_shmem=$KIB ;;
+        file_mapped) kib "$v" && u_mapped=$KIB ;;
         esac
-    done 2>/dev/null <"$G/memory.stat"
-    f_cache=$((f_file - f_shmem - f_mapped))
-    [ "$f_cache" -gt 0 ] || f_cache=0
-    f_keep=$((f_cur - f_cache))
-    [ "$f_keep" -gt 0 ] || f_keep=0
-    [ "$FLOOR_PCT" = 100 ] || f_keep=$((f_keep / 100 * FLOOR_PCT))
-    echo "${f_keep}K" >"$G/memory.min" 2>/dev/null
+    done 2>/dev/null <"$1/memory.stat"
+    UNMAPPED=$((u_file - u_shmem - u_mapped))
+    [ "$UNMAPPED" -gt 0 ] || UNMAPPED=0
 }
 
-# Works out the floors that are due: first once a process has settled, then
-# every half hour.
+# The floor of key $1 before the cap: nine tenths of what its group holds once
+# the unmapped file cache is taken off. Kept in KiB for floors_write.
+floor() {
+    grp "$1"
+    first "$G/memory.current"
+    kib "$VAL" || return 1
+    f_cur=$KIB
+    unmapped "$G"
+    f_keep=$((f_cur - UNMAPPED))
+    [ "$f_keep" -gt 0 ] || f_keep=0
+    echo $((f_keep / 100 * FLOOR_PCT)) >"$RUN/raw.$1"
+}
+
+# Writes the floors of all groups. Together they may hold a tenth of the RAM;
+# when they would hold more, every floor shrinks by the same factor.
+floors_write() {
+    w_sum=0
+    for a in $KEEP; do
+        first "$RUN/raw.$a"
+        is_num "$VAL" && w_sum=$((w_sum + VAL))
+    done
+    w_pct=100
+    mem_total
+    if [ -n "$MEMKB" ]; then
+        w_cap=$((MEMKB / 100 * CAP_PCT))
+        [ "$w_sum" -gt "$w_cap" ] && w_pct=$((w_cap * 100 / w_sum))
+    fi
+    for a in $KEEP; do
+        first "$RUN/raw.$a"
+        is_num "$VAL" || continue
+        [ "$w_pct" = 100 ] || VAL=$((VAL / 100 * w_pct))
+        grp "$a"
+        echo "${VAL}K" >"$G/memory.min" 2>/dev/null
+    done
+    return 0
+}
+
+# The floors are counted from now.
+floors_begin() {
+    uptime_s
+    echo "$UP" >"$RUN/floor.start"
+    rm -f "$RUN/floor.step" "$RUN/floor.last"
+}
+
+# Works out all floors when they are due: 1, 4, 16 and 64 s after the start,
+# then every half hour. A look that comes late does the steps it missed in
+# one. A group whose process is not there keeps the floor it had.
 floors() {
     uptime_s
+    first "$RUN/floor.start"
+    f_start=$VAL
+    is_num "$f_start" || return 0
+    first "$RUN/floor.step"
+    f_step=$VAL
+    is_num "$f_step" || f_step=0
+    f_n=0
+    f_all=0
+    for f_t in $SETTLE; do
+        f_all=$((f_all + 1))
+        [ $((UP - f_start)) -ge "$f_t" ] && f_n=$((f_n + 1))
+    done
+    if [ "$f_n" -gt "$f_step" ]; then
+        f_step=$f_n
+    else
+        # still in the first minute, or looked at less than half an hour ago
+        [ "$f_step" -ge "$f_all" ] || return 0
+        first "$RUN/floor.last"
+        is_num "$VAL" && [ $((UP - VAL)) -lt "$REFRESH" ] && return 0
+    fi
     for a in $KEEP; do
         [ -f "$RUN/watch.$a" ] || continue
-        f_since=$(cat "$RUN/since.$a" 2>/dev/null)
-        is_num "$f_since" || continue
-        f_last=$(cat "$RUN/floored.$a" 2>/dev/null)
-        if is_num "$f_last"; then
-            [ $((UP - f_last)) -ge "$REFRESH" ] || continue
-        else
-            [ $((UP - f_since)) -ge "$SETTLE" ] || continue
-        fi
-        floor "$a" && echo "$UP" >"$RUN/floored.$a"
+        grp "$a"
+        has_proc "$G" && floor "$a"
     done
+    echo "$f_step" >"$RUN/floor.step"
+    echo "$UP" >"$RUN/floor.last"
+    floors_write
+    return 0
+}
+
+# While it scans the packages at boot, system_server reads far more files than
+# it goes on using. Android asks that cache back from its group once, 10 s
+# after boot has completed, and nothing is swapped for it. A kernel that does
+# not know the request refuses it, and then it is left at that.
+boot_reclaim() {
+    [ -f "$RUN/watch.server" ] || return 0
+    grp server
+    has_proc "$G" || return 0
+    unmapped "$G"
+    [ "$UNMAPPED" -gt 0 ] || return 0
+    if echo "${UNMAPPED}K swappiness=0" >"$G/memory.reclaim" 2>/dev/null; then
+        log "server: asked $UNMAPPED KiB of unmapped file cache back"
+    fi
     return 0
 }
 
 # The watcher has to outlive the command that started it. A new one takes
 # over from one that is already running.
 watch_start() {
+    floors_begin
     if command -v setsid >/dev/null 2>&1; then
         setsid sh "$0" watch keep </dev/null >/dev/null 2>&1 &
     else
@@ -580,9 +694,7 @@ keep_on() {
     PSOUT=
     place "$1"
     k_in=0
-    for q in $(keep_pids "$1"); do
-        in_group "$q" "$G" && k_in=1
-    done
+    has_proc "$G" && k_in=1
     case $1:$k_in in
     ui:* | home:* | *:1) ;;
     *)
@@ -597,12 +709,14 @@ keep_on() {
     return 0
 }
 
+# The floors that stay may grow back to their full size.
 keep_off() {
-    rm -f "$RUN/watch.$1" "$RUN/since.$1" "$RUN/floored.$1"
+    rm -f "$RUN/watch.$1" "$RUN/raw.$1" "$RUN/since.$1" "$RUN/floored.$1"
     any_mark || rm -f "$RUN/watch.token"
     grp "$1"
     [ -d "$G" ] && log "keep $1: off"
     grp_drop "$G"
+    floors_write
 }
 
 keep_drop_all() {
@@ -612,8 +726,7 @@ keep_drop_all() {
 
 # keep_state <key>. KS: on, wait (the group is there, its process is not in it
 # yet), off, na (cannot be used here, see KEEP_WHY) or none (this phone has no
-# such process). KKB: what the group holds; KMIN: its floor, "max" while the
-# process settles.
+# such process). KKB: what the group holds; KMIN: its floor.
 keep_state() {
     KS=off
     KKB=
@@ -625,17 +738,25 @@ keep_state() {
     grp "$1"
     k_found=0
     k_in=0
-    for q in $(keep_pids "$1"); do
+    if has_proc "$G"; then
         k_found=1
-        in_group "$q" "$G" && k_in=1
-    done
+        k_in=1
+    else
+        pids_of "$1"
+        for q in $PIDS; do
+            k_found=1
+            in_group "$q" "$G" && k_in=1
+        done
+    fi
     if [ ! -f "$G/memory.min" ]; then
         case $1:$k_found in ui:* | home:* | *:1) ;; *) KS=none ;; esac
         return 0
     fi
     if [ "$k_in" = 1 ]; then KS=on; else KS=wait; fi
-    kib "$(cat "$G/memory.current" 2>/dev/null)" && KKB=$KIB
-    v=$(cat "$G/memory.min" 2>/dev/null)
+    first "$G/memory.current"
+    kib "$VAL" && KKB=$KIB
+    first "$G/memory.min"
+    v=$VAL
     case $v in
     max) KMIN=max ;;
     *K) KMIN=${v%K} ;;
@@ -646,14 +767,17 @@ keep_state() {
 
 # ------------------------------------------------------------- watcher
 
-# Keeps every process that is switched on in its group, looking again every
-# 20 s in case one was restarted, and works out the floors when they are due.
-# At boot it also sets the groups up, early enough to catch System UI and Home
-# as they start. "keep" is how a switch starts it: it only looks after the
-# groups that are there, and applies nothing.
+# Keeps every process that is switched on in its group and works out the
+# floors when they are due. It looks five times a second for its first three
+# minutes, so the floors come at their seconds, and every 20 s after that; a
+# look at a group that has its process starts no program. At boot it also sets
+# the groups up, early enough to catch System UI and Home as they start, and
+# asks system_server's boot cache back. "keep" is how a switch or an update
+# starts it: it only looks after the groups that are there, and applies nothing.
 watch() {
     load_conf
     [ ! -f "$PAUSE" ] || return 0
+    w_boot=0
     if [ "$1" != keep ]; then
         # only once it is known whether this Android does the same itself
         official_known
@@ -677,40 +801,88 @@ watch() {
             place "$d"
         done
         legacy_drop
+        floors_begin
+        w_boot=1
     fi
     any_mark || return 0
+    [ -f "$RUN/floor.start" ] || floors_begin
     token=$$
     echo "$token" >"$RUN/watch.token"
     home_app
+    for d in $KEEP; do
+        [ -f "$RUN/watch.$d" ] || continue
+        grp "$d"
+        # a version before this one had switched swap off for its groups
+        [ -f "$G/memory.swap.max" ] && echo max >"$G/memory.swap.max" 2>/dev/null
+    done
+    w_left=${WATCH_ROUNDS:-900}
+    w_slow=0
+    w_home=0
+    w_done=
     i=0
-    while [ "$(cat "$RUN/watch.token" 2>/dev/null)" = "$token" ]; do
+    while first "$RUN/watch.token" && [ "$VAL" = "$token" ]; do
         any_mark || return 0
-        w_fast=0
-        [ "$i" -lt "${WATCH_ROUNDS:-900}" ] && w_fast=1
         PSOUT=
         for d in $KEEP; do
             [ -f "$RUN/watch.$d" ] || continue
             # only the two apps start during boot; the rest is looked at every 20 s
-            case $d:$w_fast in ui:* | home:* | *:0) ;; *) [ $((i % 25)) = 0 ] || continue ;; esac
+            case $d:$w_left in ui:* | home:* | *:0) ;; *) [ $((i % 25)) = 0 ] || continue ;; esac
             grp "$d"
             [ -f "$G/cgroup.procs" ] || continue
-            for q in $(keep_pids "$d"); do
-                in_group "$q" "$G" || move "$q" "$G" "$d"
+            if has_proc "$G"; then
+                # unless another app has become the home app
+                [ "$d:$w_home" = home:1 ] || continue
+            fi
+            pids_of "$d"
+            for q in $PIDS; do
+                in_group "$q" "$G" || move "$q" "$G"
             done
         done
-        if [ "$w_fast" = 1 ]; then
-            [ $((i % 25)) = 0 ] && floors
+        w_home=0
+        if [ "$w_boot" = 1 ] && [ ! -f "$RUN/boot.reclaimed" ]; then
+            if [ -z "$w_done" ]; then
+                # asked every 5 s
+                case $w_left:$((i % 25)) in 0:* | *:0)
+                    if [ "$(getprop sys.boot_completed 2>/dev/null)" = 1 ]; then
+                        uptime_s
+                        w_done=$UP
+                    fi
+                    ;;
+                esac
+            else
+                uptime_s
+                if [ $((UP - w_done)) -ge "${BOOT_RECLAIM_AFTER:-10}" ]; then
+                    : >"$RUN/boot.reclaimed"
+                    boot_reclaim
+                fi
+            fi
+        fi
+        if [ "$w_left" -gt 0 ]; then
+            [ $((i % 5)) = 0 ] && floors
             i=$((i + 1))
+            w_left=$((w_left - 1))
             sleep "${WATCH_FAST:-0.2}" 2>/dev/null || sleep 1
         else
             floors
             [ -n "$WATCH_ONCE" ] && return 0
             sleep 20
             # the default home app can change; asked every five minutes
-            i=$((i + 1))
-            [ $((i % 15)) = 0 ] && home_app ask
+            w_slow=$((w_slow + 1))
+            if [ $((w_slow % 15)) = 0 ]; then
+                w_old=$HOMEAPP
+                home_app ask
+                [ "$HOMEAPP" = "$w_old" ] || w_home=1
+            fi
         fi
     done
+}
+
+# After an update the watcher of the new version takes over from the one that
+# is running; nothing is restarted and no switch changes.
+takeover() {
+    [ ! -f "$PAUSE" ] || return 0
+    any_mark || return 0
+    watch_start
 }
 
 # ------------------------------------------------------------ commands
@@ -762,9 +934,11 @@ status() {
     echo "reserve_now=$RES_NOW"
     echo "reserve_stock=$RES_STOCK"
     echo "keep_why=$KEEP_WHY"
-    echo "mem_total_kb=$(sed -n 's/^MemTotal: *\([0-9]*\) kB$/\1/p' "$PROC/meminfo" 2>/dev/null)"
+    mem_total
+    echo "mem_total_kb=$MEMKB"
     home_app
     echo "home_app=$HOMEAPP"
+    PSOUT=
     for d in $KEEP; do
         eval "w=\$K_$d"
         keep_state "$d"
@@ -804,6 +978,7 @@ resume)
     echo "ok=1"
     ;;
 watch) watch "$2" ;;
+takeover) takeover ;;
 guard)
     # A start that never reached "settled" (the phone went down while the
     # fixes were being applied) pauses the module instead of trying again.

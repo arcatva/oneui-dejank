@@ -8,7 +8,7 @@ T=$(mktemp -d /tmp/dejank.XXXXXX)
 trap 'rm -rf "$T"' EXIT
 
 export DATA=$T/data RUN=$T/run PROC=$T/proc VM=$T/vm SYSMOD=$T/sysmod CG=$T/cg
-export RMDIR="rm -rf" KILL=$T/bin/kill9 NAP=0 WATCH_FAST=0 WATCH_ROUNDS=2 WATCH_ONCE=1 T
+export RMDIR="rm -rf" KILL=$T/bin/kill9 NAP=0 WATCH_FAST=0 WATCH_ROUNDS=2 WATCH_ONCE=1 BOOT_RECLAIM_AFTER=0 T
 KO=$T/mod/kmod/kgsl_nowait-android16-6.12.ko
 ADDR=ffffffc07e322f20
 
@@ -70,6 +70,7 @@ EOF
 shift
 for pid in "$@"; do
     echo "kill $pid" >>"$T/calls"
+    "$T/bin/gone" "$pid"
     for f in "$T"/pids/*; do
         [ "$(cat "$f")" = "$pid" ] || continue
         new=$((pid + 1))
@@ -78,6 +79,16 @@ for pid in "$@"; do
         echo "$new (app) S 1 0 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 99990 0 0" >"$PROC/$new/stat"
         echo "0::/apps/uid_10056/pid_$new" >"$PROC/$new/cgroup"
     done
+done
+EOF
+    # the kernel takes a process that ended off the list of its group
+    cat >"$T/bin/gone" <<'EOF'
+#!/bin/sh
+find "$CG" -name cgroup.procs | while read -r f; do
+    grep -qx "$1" "$f" || continue
+    grep -vx "$1" "$f" >"$f.tmp"
+    cat "$f.tmp" >"$f"
+    rm -f "$f.tmp"
 done
 EOF
     cat >"$T/bin/cmd" <<'EOF'
@@ -118,12 +129,14 @@ EOF
     # so the stand-ins are also given to the script as functions
     for f in "$T"/bin/*; do
         n=${f##*/}
-        [ "$n" = kill9 ] || echo "$n() { \"$f\" \"\$@\"; }"
+        case $n in kill9 | gone) ;; *) echo "$n() { \"$f\" \"\$@\"; }" ;; esac
     done >"$T/prelude.sh"
 }
 
-# app <name> <pid> <started at, in hundredths of a second since boot>
+# app <name> <pid> <started at, in hundredths of a second since boot>. One of
+# that name that ran before has ended.
 app() {
+    [ -f "$T/pids/$1" ] && "$T/bin/gone" "$(cat "$T/pids/$1")"
     echo "$2" >"$T/pids/$1"
     mkdir -p "$PROC/$2"
     echo "$2 (app) S 1 0 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 $3 0 0" >"$PROC/$2/stat"
@@ -285,8 +298,9 @@ app com.android.systemui 100 5000
 app com.example.home 200 6000
 expect "System UI on" "$(ctl set ui 1)" "ok=1"
 expect "the controller is switched on at the root" "$(cat "$CG/cgroup.subtree_control")" "+memory"
-expect "fully protected while it settles" "$(cat "$CG/dejank-ui/memory.min")" "max"
-expect "never swapped" "$(cat "$CG/dejank-ui/memory.swap.max")" "0"
+expect "no floor before the floors are worked out" "$(cat "$CG/dejank-ui/memory.min")" "0"
+expect "the floors are counted from the watcher's start" "$(cat "$RUN/floor.start")" "1000"
+expect "swap is left as the system has it" "$(cat "$CG/dejank-ui/memory.swap.max")" "max"
 called "System UI is restarted into its group" "kill 100"
 not_called "the home app is left alone" "kill 200"
 expect "the new process is in the group" "$(cat "$CG/dejank-ui/cgroup.procs")" "101"
@@ -296,14 +310,58 @@ logged "it is logged" "keep ui: on"
 S=$(ctl status)
 has "System UI is on" "$S" "ui_state=on"
 has "what its group holds" "$S" "ui_kb=641291"
-has "no floor yet" "$S" "ui_min_kb=max"
+has "no floor yet" "$S" "ui_min_kb=0"
 has "the home app is not applied" "$S" "home_state=off"
 
+# the floor: nine tenths of what the process holds, without files nothing has mapped
+echo 800000000 >"$CG/dejank-ui/memory.current"
+printf '%s\n' "anon 400000000" "file 390000000" "kernel 10000000" "shmem 8000000" "file_mapped 282000000" >"$CG/dejank-ui/memory.stat"
+ctl watch keep
+expect "not in the first second" "$(cat "$CG/dejank-ui/memory.min")" "0"
+echo "1001.20 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "after one second: nine tenths of usage less the unmapped file cache" "$(cat "$CG/dejank-ui/memory.min")" "615150K"
+S=$(ctl status)
+has "the floor is shown" "$S" "ui_min_kb=615150"
+has "next to what the group holds" "$S" "ui_kb=781250"
+echo 900000000 >"$CG/dejank-ui/memory.current"
+echo "1003.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "not again before the fourth second" "$(cat "$CG/dejank-ui/memory.min")" "615150K"
+echo "1004.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "again after four seconds" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
+expect "two of the four steps done" "$(cat "$RUN/floor.step")" "2"
+# a look that comes late does the steps it missed in one
+echo 800000000 >"$CG/dejank-ui/memory.current"
+echo "1070.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "16 and 64 s in one look" "$(cat "$CG/dejank-ui/memory.min")" "615150K"
+expect "the first minute is over" "$(cat "$RUN/floor.step")" "4"
+echo 900000000 >"$CG/dejank-ui/memory.current"
+echo "1200.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "left alone for half an hour" "$(cat "$CG/dejank-ui/memory.min")" "615150K"
+echo "2900.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "then worked out again" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
+
+# a switch starts the watcher anew, and with it the count for all floors
 expect "the home app on" "$(ctl set home 1)" "ok=1"
 called "the default home app is restarted into its own group" "kill 200"
 expect "it is in its group" "$(cat "$CG/dejank-home/cgroup.procs")" "201"
 expect "the home app is remembered" "$(cat "$DATA/home")" "com.example.home"
 has "it is named" "$(ctl status)" "home_app=com.example.home"
+expect "counted from now" "$(cat "$RUN/floor.start")" "2900"
+expect "System UI keeps its floor meanwhile" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
+expect "the home app has none yet" "$(cat "$CG/dejank-home/memory.min")" "0"
+# all floors together hold a tenth of the RAM at most: 1135100 kB here.
+# 703080 + 577080 is more, so both shrink to 88 percent
+echo "2901.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "over the cap, System UI shrinks" "$(cat "$CG/dejank-ui/memory.min")" "618640K"
+expect "and the home app by the same factor" "$(cat "$CG/dejank-home/memory.min")" "507760K"
+has "the floors shown are the ones in force" "$(ctl status)" "home_min_kb=507760"
 
 # a restarted app shows up outside its group; the watcher brings it in
 app com.example.home 300 99000
@@ -311,29 +369,23 @@ has "the new one is outside" "$(ctl status)" "home_state=wait"
 ctl watch keep
 has "the watcher moved it" "$(ctl status)" "home_state=on"
 not_called "without restarting it again" "kill 300"
+expect "its group keeps the floor until the floors are next worked out" "$(cat "$CG/dejank-home/memory.min")" "507760K"
+# a group whose process is not there keeps the floor it had
+"$T/bin/gone" 300
+rm -f "$T/pids/com.example.home"
+echo 400000000 >"$CG/dejank-home/memory.current"
+echo "2904.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "the floors were worked out" "$(cat "$RUN/floor.step")" "2"
+expect "the empty group was not measured" "$(cat "$CG/dejank-home/memory.min")" "507760K"
+app com.example.home 310 290400
+ctl watch keep
+has "the home app is back in its group" "$(ctl status)" "home_state=on"
 
-# the floor: what the process works with, without files nothing has mapped
-echo 800000000 >"$CG/dejank-ui/memory.current"
-printf '%s\n' "anon 400000000" "file 390000000" "kernel 10000000" "shmem 8000000" "file_mapped 282000000" >"$CG/dejank-ui/memory.stat"
-ctl watch keep
-expect "not before the process has settled" "$(cat "$CG/dejank-ui/memory.min")" "max"
-echo "1070.00 900.00" >"$PROC/uptime"
-ctl watch keep
-expect "then usage less the unmapped file cache" "$(cat "$CG/dejank-ui/memory.min")" "683593K"
-S=$(ctl status)
-has "the floor is shown" "$S" "ui_min_kb=683593"
-has "next to what the group holds" "$S" "ui_kb=781250"
-echo 900000000 >"$CG/dejank-ui/memory.current"
-echo "1200.00 900.00" >"$PROC/uptime"
-ctl watch keep
-expect "left alone for half an hour" "$(cat "$CG/dejank-ui/memory.min")" "683593K"
-echo "2900.00 900.00" >"$PROC/uptime"
-ctl watch keep
-expect "then worked out again" "$(cat "$CG/dejank-ui/memory.min")" "781249K"
-# a process that came back is fully protected again until it has settled
-app com.android.systemui 500 289500
-ctl watch keep
-expect "a new process starts over" "$(cat "$CG/dejank-ui/memory.min")" "max"
+# a floor that goes leaves room for the others
+expect "the home app off" "$(ctl set home 0)" "ok=1"
+expect "System UI gets its full floor back" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
+expect "the home app on again" "$(ctl set home 1)" "ok=1"
 
 expect "System UI off" "$(ctl set ui 0)" "ok=1"
 [ ! -d "$CG/dejank-ui" ] && ok || bad "the group is removed"
@@ -341,7 +393,8 @@ has "the home app stays on" "$(ctl status)" "home_state=on"
 expect "the controller stays while a group is left" "$(cat "$CG/cgroup.subtree_control")" "+memory"
 [ -f "$RUN/watch.token" ] && ok || bad "the watcher is stopped although a switch is on"
 expect "the home app off" "$(ctl set home 0)" "ok=1"
-expect "back where it came from, or to the root when that is gone" "$(sort "$CG/cgroup.procs" | tr '\n' ' ')" "101 201 300 500 "
+# (the files here are plain ones: a process that moved twice is listed twice)
+expect "back where it came from, or to the root when that is gone" "$(sort -u "$CG/cgroup.procs" | tr '\n' ' ')" "101 310 "
 expect "the controller is switched off again" "$(cat "$CG/cgroup.subtree_control")" "-memory"
 [ ! -e "$RUN/watch.token" ] && ok || bad "the watcher is left running"
 logged "off is logged" "keep home: off"
@@ -412,6 +465,19 @@ has "the new one is outside" "$(ctl status)" "server_state=wait"
 ctl watch keep
 has "the watcher moved it" "$(ctl status)" "server_state=on"
 not_called "without restarting anything" "kill"
+# at boot: what system_server read while it scanned the packages is asked back, once
+ctl set ui 0 >/dev/null
+ctl set home 0 >/dev/null
+printf '%s\n' "anon 100000000" "file 300000000" "shmem 4000000" "file_mapped 96000000" >"$CG/dejank-server/memory.stat"
+ctl watch keep
+[ ! -f "$CG/dejank-server/memory.reclaim" ] && ok || bad "asked back by a watcher that a switch started"
+ctl watch
+expect "the unmapped file cache, and nothing swapped for it" "$(cat "$CG/dejank-server/memory.reclaim")" "195312K swappiness=0"
+logged "it is logged" "server: asked 195312 KiB of unmapped file cache back"
+echo gone >"$CG/dejank-server/memory.reclaim"
+ctl watch
+expect "only once in a boot" "$(cat "$CG/dejank-server/memory.reclaim")" "gone"
+
 expect "system_server off" "$(ctl set server 0)" "ok=1"
 expect "back where it came from" "$(cat "$CG/system/uid_1000/pid_55/cgroup.procs")" "55"
 has "the others stay" "$(ctl status)" "sf_state=on"

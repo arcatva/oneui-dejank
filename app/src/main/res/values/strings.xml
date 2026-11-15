@@ -38,7 +38,7 @@
         <item quantity="other">%1$d processes, %2$s</item>
     </plurals>
     <string name="keep_of">of %1$s</string>
-    <string name="keep_about">Memory of enabled processes is never swapped out or reclaimed.</string>
+    <string name="keep_about">Each enabled process gets a memory floor. Memory under the floor is not reclaimed.</string>
     <string name="keep_na_official">Built into this version of Android</string>
     <string name="keep_na_controller">Not supported by this kernel</string>
     <string name="keep_apps">Apps</string>

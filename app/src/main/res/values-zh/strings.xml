@@ -33,7 +33,7 @@
         <item quantity="other">%1$d 个进程，%2$s</item>
     </plurals>
     <string name="keep_of">共 %1$s</string>
-    <string name="keep_about">已开启进程的内存不会被换出或回收。</string>
+    <string name="keep_about">为已开启的进程设置内存保底，保底以内不被回收。</string>
     <string name="keep_na_official">当前系统已内置此功能</string>
     <string name="keep_na_controller">当前内核不支持</string>
     <string name="keep_apps">应用</string>
