@@ -2,6 +2,8 @@
 <resources>
     <string name="tagline">针对动画卡顿的内存修复</string>
     <string name="headline_paused">已暂停。</string>
+    <string name="headline_pending">还没有任何修复生效。</string>
+    <string name="not_available">不可用</string>
     <string name="tile_gpu">显存申请</string>
     <string name="tile_reserve">空闲内存储备</string>
     <string name="tile_keep">常驻内存</string>

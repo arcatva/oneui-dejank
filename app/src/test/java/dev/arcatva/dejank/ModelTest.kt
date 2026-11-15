@@ -68,7 +68,9 @@ class ModelTest {
     fun `right after installing nothing is in effect`() {
         val s = status(*fresh)
         assertEquals(0, s.working)
-        assertEquals(3, s.switchedOff)
+        // switched on and waiting is not the same as switched off
+        assertEquals(0, s.switchedOff)
+        assertTrue(s.nothingApplied)
         assertTrue(s.anyPending)
         assertTrue(s.applyRestarts)
         Fix.entries.forEach {
@@ -116,7 +118,7 @@ class ModelTest {
             "ui_kb" to "", "ui_min_kb" to "", "home_kb" to "", "home_min_kb" to "",
         )
         assertEquals(lineOf(R.string.keep_na_official), s.short(Tile.KEEP))
-        assertEquals(lineOf(R.string.keep_na_official), s.line(Keep.UI))
+        assertEquals(lineOf(R.string.not_available), s.line(Keep.UI))
         assertTrue(s.unavailable(Tile.KEEP))
         assertFalse(s.anyPending)
         // neither working nor off: the other two fixes are all there is
@@ -159,8 +161,15 @@ class ModelTest {
         assertEquals(lineOf(R.string.off), s.line(Fix.GPU))
         assertEquals(Tone.IDLE, s.tone(Fix.GPU))
         assertFalse(s.anyPending)
+        assertFalse(s.nothingApplied)
         assertEquals(2, s.working)
         assertEquals(1, s.switchedOff)
+        // a fix the kernel refused is neither working nor switched off
+        assertEquals(0, status("gpu_state" to "err", "gpu_why" to "insmod").switchedOff)
+        // nothing kept in RAM because every switch is off
+        val none = status("ui" to "0", "ui_state" to "off", "home" to "0", "home_state" to "off")
+        assertTrue(none.switchedOff(Tile.KEEP))
+        assertEquals(lineOf(R.string.off), none.short(Tile.KEEP))
     }
 
     @Test

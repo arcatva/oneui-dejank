@@ -169,9 +169,26 @@ data class Status(
         Tile.KEEP -> keepWhy.isNotEmpty()
     }
 
+    /** Switched on, but nothing of it is in effect yet. */
+    fun pending(tile: Tile): Boolean = when (tile) {
+        Tile.GPU -> pending(Fix.GPU)
+        Tile.RESERVE -> pending(Fix.RESERVE)
+        Tile.KEEP -> keepWhy.isEmpty() && keptCount == 0 && keepPending
+    }
+
+    /** Off because that is how it was set: nothing wrong, nothing waiting. */
+    fun switchedOff(tile: Tile): Boolean = when (tile) {
+        Tile.GPU -> !wanted(Fix.GPU) && state(Fix.GPU) != FixState.NA
+        Tile.RESERVE -> !wanted(Fix.RESERVE) && state(Fix.RESERVE) != FixState.NA
+        Tile.KEEP -> keepWhy.isEmpty() && Keep.entries.none { kept(it).wanted }
+    }
+
     val working: Int get() = Tile.entries.count { on(it) }
 
-    val switchedOff: Int get() = Tile.entries.count { !on(it) && !unavailable(it) }
+    val switchedOff: Int get() = Tile.entries.count { switchedOff(it) }
+
+    /** As right after installing: things are switched on and none of them is in effect. */
+    val nothingApplied: Boolean get() = !paused && working == 0 && Tile.entries.any { pending(it) }
 
     fun tone(fix: Fix): Tone = when (state(fix)) {
         FixState.ON -> Tone.GOOD
@@ -239,7 +256,8 @@ data class Status(
             }
             KeepState.WAIT -> lineOf(R.string.kept_wait)
             KeepState.NONE -> lineOf(R.string.kept_none)
-            KeepState.NA -> keepReason()
+            // why is said once, above the switches
+            KeepState.NA -> lineOf(R.string.not_available)
             KeepState.OFF -> lineOf(if (k.wanted) R.string.not_applied else R.string.off)
         }
     }

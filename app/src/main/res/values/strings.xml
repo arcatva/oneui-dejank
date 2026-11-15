@@ -4,6 +4,8 @@
     <string name="title" translatable="false">One UI Dejank</string>
     <string name="tagline">Memory fixes for animation stutter</string>
     <string name="headline_paused">Paused.</string>
+    <string name="headline_pending">Nothing is applied yet.</string>
+    <string name="not_available">Not available</string>
     <string name="tile_gpu">GPU memory</string>
     <string name="tile_reserve">Free reserve</string>
     <string name="tile_keep">Kept in RAM</string>

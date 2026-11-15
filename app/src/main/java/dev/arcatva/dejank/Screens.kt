@@ -66,6 +66,7 @@ fun Line.text(): String = stringResource(id, *args.toTypedArray())
 @Composable
 fun headline(status: Status): String {
     if (status.paused) return stringResource(R.string.headline_paused)
+    if (status.nothingApplied) return stringResource(R.string.headline_pending)
     val resources = LocalContext.current.resources
     val working = resources.getQuantityString(R.plurals.fixes_working, status.working, status.working)
     val off = status.switchedOff
