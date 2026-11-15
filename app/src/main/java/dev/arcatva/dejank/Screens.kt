@@ -64,11 +64,11 @@ fun Line.text(): String {
     return LocalContext.current.resources.getQuantityString(id, count, *args.toTypedArray())
 }
 
-/** Under the app's name: how many of the three are working. */
+/** Under the app's name: how many of the three are working. With none, what the app is for. */
 @Composable
 fun headline(status: Status): String = when {
     status.paused -> stringResource(R.string.headline_paused)
-    status.working == 0 -> stringResource(R.string.headline_none)
+    status.working == 0 -> stringResource(R.string.tagline)
     else -> LocalContext.current.resources.getQuantityString(R.plurals.fixes_working, status.working, status.working)
 }
 
@@ -503,18 +503,19 @@ internal fun SwitchRow(
         Row(
             Modifier
                 .heightIn(min = 72.dp)
-                .padding(start = 20.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
+                .padding(start = 20.dp, top = 12.dp, end = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 if (summary != null) Hint(summary, color = summaryColor)
             }
+            // tight on purpose: on a narrow cover screen with large text the name needs the room
             if (value != null) {
-                Spacer(Modifier.width(12.dp))
-                Text(value, style = MaterialTheme.typography.labelLarge, color = valueColor)
+                Spacer(Modifier.width(8.dp))
+                Text(value, style = MaterialTheme.typography.labelLarge, color = valueColor, maxLines = 1, softWrap = false)
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(8.dp))
             Switch(checked = checked, onCheckedChange = onToggle, enabled = enabled)
         }
     }

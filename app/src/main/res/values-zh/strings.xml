@@ -2,7 +2,6 @@
 <resources>
     <string name="tagline">针对动画卡顿的内存修复</string>
     <string name="headline_paused">已暂停</string>
-    <string name="headline_none">没有修复生效</string>
     <plurals name="fixes_working">
         <item quantity="other">%d 项生效中</item>
     </plurals>

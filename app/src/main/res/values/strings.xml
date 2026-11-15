@@ -5,7 +5,6 @@
     <string name="plain" translatable="false">%1$s</string>
     <string name="tagline">Memory fixes for animation stutter</string>
     <string name="headline_paused">Paused</string>
-    <string name="headline_none">No fixes working</string>
     <plurals name="fixes_working">
         <item quantity="one">%d fix working</item>
         <item quantity="other">%d fixes working</item>
