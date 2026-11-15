@@ -6,12 +6,12 @@
     <string name="tagline">Memory fixes for animation stutter</string>
     <string name="headline_paused">Paused</string>
     <plurals name="fixes_working">
-        <item quantity="one">%d fix working</item>
-        <item quantity="other">%d fixes working</item>
+        <item quantity="one">%d fix active</item>
+        <item quantity="other">%d fixes active</item>
     </plurals>
 
     <string name="tile_gpu">GPU memory</string>
-    <string name="tile_reserve">Free reserve</string>
+    <string name="tile_reserve">Memory reserve</string>
     <string name="tile_keep">Kept in RAM</string>
     <string name="on">On</string>
     <string name="off">Off</string>
@@ -21,16 +21,16 @@
     <string name="failed">Failed</string>
     <string name="built_in">Built in</string>
 
-    <string name="gpu_switch">Use smaller blocks, don\'t wait</string>
-    <string name="gpu_about">The GPU driver no longer stops to wait for the kernel to free memory.</string>
-    <string name="gpu_na_driver">No Adreno driver on this phone</string>
-    <string name="gpu_na_setting">This driver never waits</string>
-    <string name="gpu_na_kernel">No build for this kernel yet</string>
-    <string name="gpu_na_series">No build for %1$s yet</string>
-    <string name="gpu_err">The kernel refused the module</string>
+    <string name="gpu_switch">Fall back to smaller pages</string>
+    <string name="gpu_about">Prevents the GPU driver from blocking on memory reclaim during allocation.</string>
+    <string name="gpu_na_driver">No Adreno driver detected</string>
+    <string name="gpu_na_setting">Not needed with this driver</string>
+    <string name="gpu_na_kernel">This kernel is not supported yet</string>
+    <string name="gpu_na_series">%1$s is not supported yet</string>
+    <string name="gpu_err">The kernel rejected the module</string>
 
-    <string name="reserve_switch">Free memory earlier</string>
-    <string name="reserve_about">Starts at about 3% free instead of under 1%.</string>
+    <string name="reserve_switch">Raise the reclaim watermark</string>
+    <string name="reserve_about">Background reclaim starts at about 3% free memory instead of under 1%.</string>
     <string name="reserve_na">Not supported by this kernel</string>
 
     <plurals name="keep_short">
@@ -38,35 +38,35 @@
         <item quantity="other">%1$d processes, %2$s</item>
     </plurals>
     <string name="keep_of">of %1$s</string>
-    <string name="keep_about">What you switch on is never swapped out or reclaimed.</string>
-    <string name="keep_na_official">This Android already does it</string>
+    <string name="keep_about">Memory of enabled processes is never swapped out or reclaimed.</string>
+    <string name="keep_na_official">Built into this version of Android</string>
     <string name="keep_na_controller">Not supported by this kernel</string>
     <string name="keep_apps">Apps</string>
     <string name="keep_system">System processes</string>
     <string name="keep_ui">System UI</string>
-    <string name="keep_ui_role">Status bar and panels</string>
+    <string name="keep_ui_role">Status bar and notification panel</string>
     <string name="keep_home">Home app</string>
     <string name="keep_home_role">Home screen and recents</string>
     <string name="keep_sf" translatable="false">SurfaceFlinger</string>
-    <string name="keep_sf_role">Composes each frame</string>
+    <string name="keep_sf_role">Layer composition</string>
     <string name="keep_composer">Display composer</string>
-    <string name="keep_composer_role">Sends frames to the screen</string>
+    <string name="keep_composer_role">Display output</string>
     <string name="keep_alloc">Graphics allocator</string>
-    <string name="keep_alloc_role">Allocates frame buffers</string>
+    <string name="keep_alloc_role">Frame buffer allocation</string>
     <string name="keep_server" translatable="false">system_server</string>
-    <string name="keep_server_role">Windows and input</string>
+    <string name="keep_server_role">Window management and input</string>
     <string name="kept_wait">Waiting</string>
-    <string name="kept_none">Not present</string>
+    <string name="kept_none">Not found</string>
 
-    <string name="pending_title">Not applied yet</string>
+    <string name="pending_title">Settings not applied yet</string>
     <string name="apply">Apply</string>
     <string name="paused_title">Paused</string>
-    <string name="paused_text">The last boot didn\'t finish.</string>
+    <string name="paused_text">The last boot did not complete.</string>
     <string name="resume">Resume</string>
     <string name="update_title">Update the app</string>
-    <string name="update_text">It doesn\'t match the installed module.</string>
+    <string name="update_text">The app and the installed module versions differ.</string>
     <string name="restart_title">Restart now?</string>
-    <string name="restart_text">System UI or the home app restarts. The screen flickers for a few seconds.</string>
+    <string name="restart_text">System UI or the home app will restart. The screen flickers briefly.</string>
     <string name="restart">Restart</string>
     <string name="cancel">Cancel</string>
     <string name="back">Back</string>
@@ -75,16 +75,16 @@
     <string name="theme_system">System</string>
     <string name="theme_light">Light</string>
     <string name="copy_report">Copy report</string>
-    <string name="source">Source</string>
+    <string name="source">Source code</string>
 
     <string name="no_root_title">No root access</string>
-    <string name="no_root_text">Allow Dejank in your root manager.</string>
+    <string name="no_root_text">Grant Dejank root access in your root manager.</string>
     <string name="no_module_title">Module not found</string>
-    <string name="no_module_text">Install the One UI Dejank zip in your root manager.</string>
-    <string name="broken_title">The module didn\'t answer</string>
+    <string name="no_module_text">Install the One UI Dejank module in your root manager first.</string>
+    <string name="broken_title">The module is not responding</string>
     <string name="broken_text">The control script returned no status.</string>
-    <string name="msg_failed">That didn\'t work</string>
+    <string name="msg_failed">Action failed</string>
     <string name="msg_resumed">Resumed</string>
     <string name="msg_report_copied">Report copied</string>
-    <string name="msg_report_failed">Can\'t read the report. Check root access.</string>
+    <string name="msg_report_failed">Unable to read the report. Check root access.</string>
 </resources>
