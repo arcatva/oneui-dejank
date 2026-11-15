@@ -1,7 +1,7 @@
 id=oneui-dejank
 name=One UI Dejank
-version=v0.2.0-beta1
-versionCode=3
+version=v0.2.0-beta2
+versionCode=4
 author=arcatva
-description=Three memory fixes for animation stutter on One UI (Snapdragon): GPU memory without waiting, a larger free-memory reserve, System UI and Home kept in RAM. Each has its own switch in the Dejank app.
+description=Memory fixes for animation stutter on One UI (Snapdragon): GPU memory without waiting, a larger free-memory reserve, and the processes that draw every frame kept in RAM. The switches are in the Dejank app.
 updateJson=https://raw.githubusercontent.com/arcatva/oneui-dejank/main/update.json

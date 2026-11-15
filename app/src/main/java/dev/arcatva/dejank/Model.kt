@@ -1,12 +1,14 @@
 package dev.arcatva.dejank
 
-/** The version of dejank.sh's status output this app understands. */
-const val EXPECTED_API = 2
+import java.util.Locale
 
-enum class ThemeChoice(val label: String) {
-    DARK("Dark"),
-    SYSTEM("System"),
-    LIGHT("Light"),
+/** The version of dejank.sh's status output this app understands. */
+const val EXPECTED_API = 3
+
+enum class ThemeChoice(val label: Int) {
+    DARK(R.string.theme_dark),
+    SYSTEM(R.string.theme_system),
+    LIGHT(R.string.theme_light),
     ;
 
     companion object {
@@ -39,49 +41,75 @@ enum class FixState {
 /** How a state line is coloured. */
 enum class Tone { GOOD, IDLE, WAITING, BAD }
 
-/** The fixes. [key] is the name dejank.sh knows each by. */
-enum class Fix(val key: String, val title: String, val summary: String, val help: String) {
-    GPU(
-        "gpu",
-        "No-wait GPU memory",
-        "The graphics driver takes a smaller block of memory instead of stalling for a large one.",
-        "When large free blocks run out, the Adreno driver makes the kernel free memory on the spot. " +
-            "The thread drawing the frame waits, often for tens of milliseconds.\n\n" +
-            "This loads a small kernel module that sets the driver's retry threshold to 0, the driver's " +
-            "own value for \"don't wait\". Switching it off puts the old value back.\n\n" +
-            "Cost: GPU memory is built from smaller blocks more often.",
-    ),
-    RESERVE(
-        "reserve",
-        "More free memory",
-        "Memory is freed in the background earlier, so apps rarely have to wait for it.",
-        "Android keeps a small reserve of free memory. When an app uses it up faster than the " +
-            "background reclaimer refills it, the app waits while memory is freed.\n\n" +
-            "This raises vm.watermark_scale_factor to 300: reclaiming starts at about 3% of RAM free " +
-            "instead of under 1%.\n\n" +
-            "Cost: that memory is not used for cache or background apps.",
-    ),
-    PIN(
-        "pin",
-        "Keep the UI in RAM",
-        "System UI and Home are never compressed or dropped, so the panel and home screen don't reload.",
-        "Under memory pressure Android compresses or drops parts of System UI and the launcher like " +
-            "any other app. Opening the panel or going home then waits while they are read back.\n\n" +
-            "This moves both into a memory group the kernel may not reclaim or swap. They restart once " +
-            "so that all their memory starts inside the group.\n\n" +
-            "Cost: their memory is never freed for other apps. The line below shows how much that is.",
-    ),
-    SYS(
-        "sys",
-        "Keep the system in RAM",
-        "Android's system process keeps what it reads in RAM, so opening and switching apps doesn't wait for it.",
-        "Every app launch and switch goes through system_server. Under memory pressure parts of it are " +
-            "dropped, and it reads them back from storage while the app drawing the frame waits for it.\n\n" +
-            "This moves system_server into a second memory group the kernel may not reclaim or swap. It " +
-            "cannot be restarted, so only what it reads from then on is protected.\n\n" +
-            "Cost: that memory is never freed for other apps. New and still being measured, so it is off " +
-            "until you switch it on.",
-    ),
+/** Text that lives in the resources: [id] filled in with [args]. */
+data class Line(val id: Int, val args: List<Any> = emptyList())
+
+fun lineOf(id: Int, vararg args: Any): Line = Line(id, args.toList())
+
+/** The two fixes that are one switch each. [key] is the name dejank.sh knows each by. */
+enum class Fix(val key: String, val switch: Int, val about: Int, val cost: Int) {
+    GPU("gpu", R.string.gpu_switch, R.string.gpu_about, R.string.gpu_cost),
+    RESERVE("reserve", R.string.reserve_switch, R.string.reserve_about, R.string.reserve_cost),
+}
+
+/**
+ * A process that can be kept in RAM, each with a switch of its own. An app
+ * [restarts] once into its memory group; a system process is moved as it is.
+ */
+enum class Keep(val key: String, val restarts: Boolean, val title: Int, val role: Int) {
+    UI("ui", true, R.string.keep_ui, R.string.keep_ui_role),
+    HOME("home", true, R.string.keep_home, R.string.keep_home_role),
+    SF("sf", false, R.string.keep_sf, R.string.keep_sf_role),
+    COMPOSER("composer", false, R.string.keep_composer, R.string.keep_composer_role),
+    ALLOC("alloc", false, R.string.keep_alloc, R.string.keep_alloc_role),
+    SERVER("server", false, R.string.keep_server, R.string.keep_server_role),
+}
+
+enum class KeepState {
+    ON,
+
+    /** The memory group is there, the process is not in it yet. */
+    WAIT,
+    OFF,
+
+    /** Nothing can be kept on this phone, see [Status.keepWhy]. */
+    NA,
+
+    /** This phone has no such process. */
+    NONE,
+    ;
+
+    companion object {
+        fun parse(text: String?): KeepState = when (text) {
+            "on" -> ON
+            "wait" -> WAIT
+            "na" -> NA
+            "none" -> NONE
+            else -> OFF
+        }
+    }
+}
+
+data class Kept(
+    val wanted: Boolean = false,
+    val state: KeepState = KeepState.OFF,
+    /** What the memory group holds. */
+    val kb: Long? = null,
+    /** Its floor: what is never reclaimed. Null while the process settles and everything is kept. */
+    val minKb: Long? = null,
+    val settling: Boolean = false,
+) {
+    val active: Boolean get() = state == KeepState.ON || state == KeepState.WAIT
+
+    /** What is kept right now. */
+    val keptKb: Long? get() = minKb ?: kb
+}
+
+/** The tiles of the first screen. */
+enum class Tile(val title: Int, val icon: Int) {
+    GPU(R.string.tile_gpu, R.drawable.ic_gpu),
+    RESERVE(R.string.tile_reserve, R.drawable.ic_reserve),
+    KEEP(R.string.tile_keep, R.drawable.ic_keep),
 }
 
 /** What `dejank.sh status` reported. */
@@ -100,30 +128,50 @@ data class Status(
     val gpuWas: Int? = null,
     val reserveNow: Int? = null,
     val reserveStock: Int? = null,
-    /** System UI and Home processes running, and how many of them are in the group. */
-    val pinApps: Int = 0,
-    val pinIn: Int = 0,
-    val pinKb: Long? = null,
-    val pinSwapKb: Long? = null,
-    /** system_server is in its group. */
-    val sysIn: Boolean = false,
-    val sysKb: Long? = null,
+    /** Why nothing can be kept in RAM here: "official" (Android does it itself), "controller", or empty. */
+    val keepWhy: String = "",
+    val memTotalKb: Long? = null,
+    val kept: Map<Keep, Kept> = emptyMap(),
 ) {
     fun wanted(fix: Fix): Boolean = wanted[fix] == true
 
     fun state(fix: Fix): FixState = states[fix] ?: FixState.OFF
 
+    fun kept(keep: Keep): Kept = kept[keep] ?: Kept()
+
     /** Switched on but not in effect, as after installing or after a reboot the module did not see. */
     fun pending(fix: Fix): Boolean = wanted(fix) && state(fix) == FixState.OFF
 
-    val anyPending: Boolean get() = !paused && Fix.entries.any { pending(it) }
+    fun pending(keep: Keep): Boolean = kept(keep).let { it.wanted && it.state == KeepState.OFF }
 
-    val active: Int get() = Fix.entries.count { state(it) == FixState.ON }
+    val keepPending: Boolean get() = Keep.entries.any { pending(it) }
 
-    fun headline(): String = when {
-        paused -> "Paused"
-        else -> "$active of ${Fix.entries.size} fixes active"
+    val anyPending: Boolean get() = !paused && (Fix.entries.any { pending(it) } || keepPending)
+
+    /** Applying would restart System UI or the home app. */
+    val applyRestarts: Boolean get() = Keep.entries.any { it.restarts && pending(it) }
+
+    /** Everything that is kept in RAM right now. */
+    val keptKb: Long get() = Keep.entries.sumOf { k -> kept(k).let { if (it.active) it.keptKb ?: 0L else 0L } }
+
+    val keptCount: Int get() = Keep.entries.count { kept(it).active }
+
+    fun on(tile: Tile): Boolean = when (tile) {
+        Tile.GPU -> state(Fix.GPU) == FixState.ON
+        Tile.RESERVE -> state(Fix.RESERVE) == FixState.ON
+        Tile.KEEP -> keptCount > 0
     }
+
+    /** Nothing to switch on here: counted neither as working nor as off. */
+    fun unavailable(tile: Tile): Boolean = when (tile) {
+        Tile.GPU -> state(Fix.GPU) == FixState.NA
+        Tile.RESERVE -> state(Fix.RESERVE) == FixState.NA
+        Tile.KEEP -> keepWhy.isNotEmpty()
+    }
+
+    val working: Int get() = Tile.entries.count { on(it) }
+
+    val switchedOff: Int get() = Tile.entries.count { !on(it) && !unavailable(it) }
 
     fun tone(fix: Fix): Tone = when (state(fix)) {
         FixState.ON -> Tone.GOOD
@@ -132,55 +180,106 @@ data class Status(
         FixState.OFF -> if (wanted(fix)) Tone.WAITING else Tone.IDLE
     }
 
+    fun tone(keep: Keep): Tone = kept(keep).let {
+        when (it.state) {
+            KeepState.ON -> Tone.GOOD
+            KeepState.WAIT -> Tone.WAITING
+            KeepState.OFF -> if (it.wanted) Tone.WAITING else Tone.IDLE
+            KeepState.NA, KeepState.NONE -> Tone.IDLE
+        }
+    }
+
     /** The state of one fix in a few words, with the numbers that show it. */
-    fun line(fix: Fix): String {
+    fun line(fix: Fix): Line {
         val state = state(fix)
-        if (state == FixState.OFF) return if (wanted(fix)) "Not applied" else "Off"
+        if (state == FixState.OFF) return lineOf(if (wanted(fix)) R.string.not_applied else R.string.off)
         return when (fix) {
             Fix.GPU -> when (state) {
-                FixState.ON -> when {
-                    gpuWas == 0 -> "Active · this driver never waited"
-                    gpuWas != null -> "Active · driver threshold $gpuWas → 0"
-                    else -> "Active"
+                FixState.ON -> {
+                    val was = gpuWas
+                    when {
+                        was == null -> lineOf(R.string.in_effect)
+                        was == 0 -> lineOf(R.string.gpu_on_never)
+                        else -> lineOf(R.string.gpu_on, was)
+                    }
                 }
                 FixState.NA -> when (gpuWhy) {
-                    "driver" -> "No Adreno driver on this device"
-                    "setting" -> "Not needed: this driver never waits"
-                    else -> if (gpuSeries.isEmpty()) "No build for this kernel" else "No build for $gpuSeries yet"
+                    "driver" -> lineOf(R.string.gpu_na_driver)
+                    "setting" -> lineOf(R.string.gpu_na_setting)
+                    else -> if (gpuSeries.isEmpty()) lineOf(R.string.gpu_na_kernel) else lineOf(R.string.gpu_na_series, gpuSeries)
                 }
-                else -> "The kernel refused the module"
+                else -> lineOf(R.string.gpu_err)
             }
 
             Fix.RESERVE -> when (state) {
-                FixState.ON -> when {
-                    reserveNow == null -> "Active"
-                    reserveStock != null && reserveStock < reserveNow -> "Active · scale $reserveStock → $reserveNow"
-                    else -> "Active · scale $reserveNow"
+                FixState.ON -> {
+                    val now = reserveNow
+                    val stock = reserveStock
+                    when {
+                        now == null -> lineOf(R.string.in_effect)
+                        stock != null && stock < now -> lineOf(R.string.reserve_on, stock, now)
+                        else -> lineOf(R.string.reserve_on_plain, now)
+                    }
                 }
-                else -> "Not available on this kernel"
+                else -> lineOf(R.string.reserve_na)
             }
+        }
+    }
 
-            Fix.PIN -> when (state) {
-                FixState.ON -> buildString {
-                    append(if (pinApps > 0) "$pinIn of $pinApps kept" else "Active")
-                    pinKb?.let { append(" · ${megabytes(it)} in RAM") }
-                    pinSwapKb?.takeIf { it >= 1024 }?.let { append(", ${megabytes(it)} compressed") }
+    fun line(keep: Keep): Line {
+        val k = kept(keep)
+        return when (k.state) {
+            KeepState.ON -> {
+                val kb = k.keptKb
+                when {
+                    kb == null -> lineOf(R.string.kept_plain)
+                    k.settling -> lineOf(R.string.kept_settling, size(kb))
+                    else -> lineOf(R.string.kept_on, size(kb))
                 }
-                else -> "No memory controller on this kernel"
             }
+            KeepState.WAIT -> lineOf(R.string.kept_wait)
+            KeepState.NONE -> lineOf(R.string.kept_none)
+            KeepState.NA -> keepReason()
+            KeepState.OFF -> lineOf(if (k.wanted) R.string.not_applied else R.string.off)
+        }
+    }
 
-            Fix.SYS -> when (state) {
-                FixState.ON -> buildString {
-                    append(if (sysIn) "Kept" else "Waiting for system_server")
-                    sysKb?.let { append(" · ${megabytes(it)} in RAM") }
-                }
-                else -> "No memory controller on this kernel"
-            }
+    /** Why nothing can be kept in RAM on this phone. */
+    fun keepReason(): Line =
+        lineOf(if (keepWhy == "official") R.string.keep_na_official else R.string.keep_na_controller)
+
+    /** What a tile says under its name. */
+    fun short(tile: Tile): Line = when (tile) {
+        Tile.GPU -> if (on(tile)) lineOf(R.string.gpu_short_on) else line(Fix.GPU)
+        Tile.RESERVE -> {
+            val now = reserveNow
+            if (on(tile) && now != null) lineOf(R.string.reserve_short_on, now) else line(Fix.RESERVE)
+        }
+        Tile.KEEP -> when {
+            keepWhy.isNotEmpty() -> keepReason()
+            on(tile) -> lineOf(R.string.keep_short_on, size(keptKb))
+            keepPending -> lineOf(R.string.not_applied)
+            else -> lineOf(R.string.off)
+        }
+    }
+
+    fun tone(tile: Tile): Tone = when (tile) {
+        Tile.GPU -> tone(Fix.GPU)
+        Tile.RESERVE -> tone(Fix.RESERVE)
+        Tile.KEEP -> when {
+            keepWhy.isNotEmpty() -> Tone.IDLE
+            on(tile) -> Tone.GOOD
+            keepPending -> Tone.WAITING
+            else -> Tone.IDLE
         }
     }
 }
 
-fun megabytes(kb: Long): String = "${(kb + 512) / 1024} MB"
+/** A memory size the way people say it: 780 MB, 1.6 GB. */
+fun size(kb: Long): String {
+    val mb = (kb + 512) / 1024
+    return if (mb < 1000) "$mb MB" else String.format(Locale.US, "%.1f GB", kb / 1048576.0)
+}
 
 /** Parses the key=value lines of `dejank.sh status`. Null when the text is not that. */
 fun parseStatus(text: String): Status? {
@@ -202,11 +301,17 @@ fun parseStatus(text: String): Status? {
         gpuWas = map["gpu_was"]?.toIntOrNull(),
         reserveNow = map["reserve_now"]?.toIntOrNull(),
         reserveStock = map["reserve_stock"]?.toIntOrNull(),
-        pinApps = map["pin_apps"]?.toIntOrNull() ?: 0,
-        pinIn = map["pin_in"]?.toIntOrNull() ?: 0,
-        pinKb = map["pin_kb"]?.toLongOrNull(),
-        pinSwapKb = map["pin_swap_kb"]?.toLongOrNull(),
-        sysIn = map["sys_in"] == "1",
-        sysKb = map["sys_kb"]?.toLongOrNull(),
+        keepWhy = map["keep_why"].orEmpty(),
+        memTotalKb = map["mem_total_kb"]?.toLongOrNull(),
+        kept = Keep.entries.associateWith { keep ->
+            val min = map[keep.key + "_min_kb"]
+            Kept(
+                wanted = map[keep.key] == "1",
+                state = KeepState.parse(map[keep.key + "_state"]),
+                kb = map[keep.key + "_kb"]?.toLongOrNull(),
+                minKb = min?.toLongOrNull(),
+                settling = min == "max",
+            )
+        },
     )
 }

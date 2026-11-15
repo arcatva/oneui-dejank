@@ -11,12 +11,15 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MotionScheme
@@ -24,6 +27,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -33,11 +37,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -103,7 +110,8 @@ fun AppTheme(choice: ThemeChoice = ThemeChoice.DARK, content: @Composable () -> 
 
 /** What the screen can ask for; keeps the composables free of the view model. */
 class Actions(
-    val set: (Fix, Boolean) -> Unit,
+    /** Switches one thing on or off, by the name dejank.sh knows it by. */
+    val set: (String, Boolean) -> Unit,
     val apply: () -> Unit,
     val resume: () -> Unit,
     val copyReport: () -> Unit,
@@ -143,7 +151,7 @@ fun App(theme: ThemeChoice, onTheme: (ThemeChoice) -> Unit, vm: MainViewModel = 
         }
     }
     LaunchedEffect(Unit) {
-        vm.messages.collect { snackbar.showSnackbar(it) }
+        vm.messages.collect { snackbar.showSnackbar(context.getString(it)) }
     }
 
     AppScaffold(
@@ -156,7 +164,10 @@ fun App(theme: ThemeChoice, onTheme: (ThemeChoice) -> Unit, vm: MainViewModel = 
     )
 }
 
-/** The whole screen for a given state; no view model, so it can be rendered in tests. */
+/**
+ * The whole screen for a given state; no view model, so it can be rendered in
+ * tests. [initialTile] opens the screen with that tile's details.
+ */
 @Composable
 fun AppScaffold(
     state: UiState,
@@ -165,18 +176,35 @@ fun AppScaffold(
     theme: ThemeChoice = ThemeChoice.DARK,
     snackbar: SnackbarHostState = remember { SnackbarHostState() },
     appVersion: String = "",
+    initialTile: Tile? = null,
 ) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    val status = (state.screen as? Screen.Ready)?.status
+    val status = (state.screen as? Screen.Ready)?.status?.takeIf { it.api == EXPECTED_API }
     val wide = LocalConfiguration.current.screenWidthDp >= WIDE_FROM_DP
+    var openName by rememberSaveable { mutableStateOf(initialTile?.name) }
+    val open = Tile.entries.firstOrNull { it.name == openName }
+    // On a narrow screen a tile's details are a screen of their own, left with Back.
+    val inDetail = status != null && !wide && open != null
+    BackHandler(enabled = inDetail) { openName = null }
     Scaffold(
-        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
+        modifier = if (inDetail) Modifier else Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = {
-            LargeFlexibleTopAppBar(
-                title = { Text("One UI Dejank") },
-                subtitle = { Text(status?.headline() ?: "Memory fixes for animation stutter") },
-                scrollBehavior = scroll,
-            )
+            if (inDetail && open != null) {
+                TopAppBar(
+                    title = { Text(stringResource(open.title)) },
+                    navigationIcon = {
+                        IconButton(onClick = { openName = null }) {
+                            Icon(painterResource(R.drawable.ic_back), contentDescription = stringResource(R.string.back))
+                        }
+                    },
+                )
+            } else {
+                LargeFlexibleTopAppBar(
+                    title = { Text(stringResource(R.string.title)) },
+                    subtitle = { Text(if (status != null) headline(status) else stringResource(R.string.tagline)) },
+                    scrollBehavior = scroll,
+                )
+            }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
@@ -184,20 +212,20 @@ fun AppScaffold(
             Screen.Loading -> LoadingScreen(padding)
             Screen.NoRoot -> MessageScreen(
                 padding = padding,
-                title = "No root access",
-                body = "Allow Dejank in your root manager's superuser list, then retry.",
+                title = stringResource(R.string.no_root_title),
+                body = stringResource(R.string.no_root_text),
                 onRetry = onRetry,
             )
             Screen.NoModule -> MessageScreen(
                 padding = padding,
-                title = "Module not found",
-                body = "Install the One UI Dejank zip in your root manager. This app is its control panel.",
+                title = stringResource(R.string.no_module_title),
+                body = stringResource(R.string.no_module_text),
                 onRetry = onRetry,
             )
             is Screen.Broken -> MessageScreen(
                 padding = padding,
-                title = "The module didn't answer",
-                body = screen.detail.ifBlank { "The control script returned no status." },
+                title = stringResource(R.string.broken_title),
+                body = screen.detail.ifBlank { stringResource(R.string.broken_text) },
                 onRetry = onRetry,
             )
             is Screen.Ready -> ReadyScreen(
@@ -205,6 +233,8 @@ fun AppScaffold(
                 busy = state.busy,
                 theme = theme,
                 wide = wide,
+                open = open,
+                onOpen = { openName = it.name },
                 actions = actions,
                 appVersion = appVersion,
                 modifier = Modifier.padding(padding),

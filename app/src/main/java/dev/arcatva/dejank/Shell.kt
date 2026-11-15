@@ -67,7 +67,8 @@ object Ctl {
         return result.code == 0 && result.out.contains("ok=1")
     }
 
-    suspend fun set(fix: Fix, on: Boolean): Boolean = command("set ${fix.key} ${if (on) 1 else 0}")
+    /** [key] comes from [Fix.key] or [Keep.key], never from outside the app. */
+    suspend fun set(key: String, on: Boolean): Boolean = command("set $key ${if (on) 1 else 0}")
 
     suspend fun apply(): Boolean = command("apply")
 

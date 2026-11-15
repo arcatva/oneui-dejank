@@ -41,12 +41,16 @@ class ScreenshotTest {
 
     private fun status(vararg change: Pair<String, String>): Status {
         val map = linkedMapOf(
-            "api" to "2", "version" to "v0.1.0", "build" to "1", "paused" to "0",
+            "api" to "3", "version" to "v0.2.0", "build" to "4", "paused" to "0",
             "gpu" to "1", "gpu_state" to "on", "gpu_why" to "", "gpu_was" to "2",
             "reserve" to "1", "reserve_state" to "on", "reserve_now" to "300", "reserve_stock" to "73",
-            "pin" to "1", "pin_state" to "on", "pin_apps" to "2", "pin_in" to "2",
-            "pin_kb" to "641292", "pin_swap_kb" to "0",
-            "sys" to "0", "sys_state" to "off", "sys_in" to "0", "sys_kb" to "",
+            "keep_why" to "", "mem_total_kb" to "11351040",
+            "ui" to "1", "ui_state" to "on", "ui_kb" to "861184", "ui_min_kb" to "798720",
+            "home" to "1", "home_state" to "on", "home_kb" to "824320", "home_min_kb" to "559104",
+            "sf" to "0", "sf_state" to "off", "sf_kb" to "", "sf_min_kb" to "",
+            "composer" to "0", "composer_state" to "off", "composer_kb" to "", "composer_min_kb" to "",
+            "alloc" to "0", "alloc_state" to "off", "alloc_kb" to "", "alloc_min_kb" to "",
+            "server" to "0", "server_state" to "off", "server_kb" to "", "server_min_kb" to "",
         )
         change.forEach { (k, v) -> map[k] = v }
         return parseStatus(map.entries.joinToString("\n") { "${it.key}=${it.value}" })!!
@@ -54,7 +58,16 @@ class ScreenshotTest {
 
     private val fresh = arrayOf(
         "gpu_state" to "off", "gpu_was" to "", "reserve_state" to "off", "reserve_now" to "73",
-        "pin_state" to "off", "pin_apps" to "0", "pin_in" to "0", "pin_kb" to "", "pin_swap_kb" to "",
+        "ui_state" to "off", "ui_kb" to "", "ui_min_kb" to "",
+        "home_state" to "off", "home_kb" to "", "home_min_kb" to "",
+    )
+
+    /** Everything in the chain switched on, the way a phone looks a while after that. */
+    private val all = arrayOf(
+        "sf" to "1", "sf_state" to "on", "sf_kb" to "56320", "sf_min_kb" to "40960",
+        "composer" to "1", "composer_state" to "on", "composer_kb" to "9216", "composer_min_kb" to "max",
+        "alloc" to "1", "alloc_state" to "wait", "alloc_kb" to "", "alloc_min_kb" to "max",
+        "server" to "1", "server_state" to "on", "server_kb" to "512000", "server_min_kb" to "430080",
     )
 
     private fun shoot(
@@ -62,6 +75,7 @@ class ScreenshotTest {
         state: UiState,
         theme: ThemeChoice = ThemeChoice.DARK,
         fontScale: Float = 1f,
+        open: Tile? = null,
         tap: String? = null,
         tapIndex: Int = 0,
     ) {
@@ -69,7 +83,14 @@ class ScreenshotTest {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
                 AppTheme(theme) {
-                    AppScaffold(state = state, actions = noActions, onRetry = {}, theme = theme, appVersion = "v0.1.0")
+                    AppScaffold(
+                        state = state,
+                        actions = noActions,
+                        onRetry = {},
+                        theme = theme,
+                        appVersion = "v0.2.0",
+                        initialTile = open,
+                    )
                 }
             }
         }
@@ -90,62 +111,91 @@ class ScreenshotTest {
     private fun ready(vararg change: Pair<String, String>) = UiState(screen = Screen.Ready(status(*change)))
 
     @Test
-    @Config(qualifiers = "w412dp-h1500dp-night-xhdpi")
-    fun allOnDark() = shoot("all_on_dark", ready())
+    @Config(qualifiers = "w412dp-h900dp-night-xhdpi")
+    fun homeDark() = shoot("home_dark", ready())
 
     @Test
-    @Config(qualifiers = "w412dp-h1500dp-night-xhdpi")
-    fun systemKept() = shoot(
-        "system_kept",
-        ready("sys" to "1", "sys_state" to "on", "sys_in" to "1", "sys_kb" to "421888", "pin_kb" to "1685504"),
-    )
+    @Config(qualifiers = "w412dp-h900dp-xhdpi")
+    fun homeLight() = shoot("home_light", ready(), theme = ThemeChoice.LIGHT)
 
     @Test
-    @Config(qualifiers = "w412dp-h1500dp-xhdpi")
-    fun allOnLight() = shoot("all_on_light", ready(), theme = ThemeChoice.LIGHT)
+    @Config(qualifiers = "zh-rCN-w412dp-h900dp-night-xhdpi")
+    fun homeChinese() = shoot("home_zh", ready())
 
     @Test
-    @Config(qualifiers = "w880dp-h800dp-night-xhdpi")
-    fun unfolded() = shoot("unfolded", ready())
+    @Config(qualifiers = "w412dp-h1300dp-night-xhdpi")
+    fun keepDetail() = shoot("keep_detail", ready(), open = Tile.KEEP)
+
+    @Test
+    @Config(qualifiers = "w412dp-h1300dp-night-xhdpi")
+    fun keepDetailAllOn() = shoot("keep_detail_all_on", ready(*all), open = Tile.KEEP)
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w412dp-h1300dp-night-xhdpi")
+    fun keepDetailChinese() = shoot("keep_detail_zh", ready(*all), open = Tile.KEEP)
+
+    @Test
+    @Config(qualifiers = "w412dp-h800dp-night-xhdpi")
+    fun gpuDetail() = shoot("gpu_detail", ready(), open = Tile.GPU)
+
+    @Test
+    @Config(qualifiers = "w412dp-h800dp-night-xhdpi")
+    fun reserveDetail() = shoot("reserve_detail", ready(), open = Tile.RESERVE)
+
+    /** An unfolded Fold: the tiles and one tile's details side by side. */
+    @Test
+    @Config(qualifiers = "w880dp-h1100dp-night-xhdpi")
+    fun unfolded() = shoot("unfolded", ready(*all))
 
     /** Right after installing the zip: everything wanted, nothing in effect. */
     @Test
-    @Config(qualifiers = "w412dp-h1600dp-night-xhdpi")
+    @Config(qualifiers = "w412dp-h1000dp-night-xhdpi")
     fun freshInstall() = shoot("fresh_install", ready(*fresh))
 
-    /** Another phone: no kernel module for it, and one fix switched off. */
+    /** Another phone: no kernel module for it, and Android 17 keeps the processes in RAM itself. */
     @Test
-    @Config(qualifiers = "w412dp-h1500dp-night-xhdpi")
-    fun otherPhone() = shoot(
-        "other_phone",
-        ready(
-            "gpu_state" to "na", "gpu_why" to "kernel", "gpu_series" to "android15-6.6", "gpu_was" to "",
-            "pin" to "0", "pin_state" to "off",
-        ),
+    @Config(qualifiers = "w412dp-h900dp-night-xhdpi")
+    fun otherPhone() = shoot("other_phone", ready(*official))
+
+    @Test
+    @Config(qualifiers = "w412dp-h1000dp-night-xhdpi")
+    fun otherPhoneKeep() = shoot("other_phone_keep", ready(*official), open = Tile.KEEP)
+
+    private val official = arrayOf(
+        "gpu_state" to "na", "gpu_why" to "kernel", "gpu_series" to "android15-6.6", "gpu_was" to "",
+        "keep_why" to "official",
+        "ui_state" to "na", "home_state" to "na", "sf_state" to "na",
+        "composer_state" to "na", "alloc_state" to "na", "server_state" to "na",
+        "ui_kb" to "", "ui_min_kb" to "", "home_kb" to "", "home_min_kb" to "",
     )
 
     @Test
-    @Config(qualifiers = "w412dp-h1600dp-night-xhdpi")
+    @Config(qualifiers = "w412dp-h1000dp-night-xhdpi")
     fun paused() = shoot("paused", ready("paused" to "1", *fresh))
 
     /** A narrow cover screen with large text: nothing may overlap or be cut off. */
     @Test
-    @Config(qualifiers = "w340dp-h2300dp-night-xhdpi")
+    @Config(qualifiers = "w340dp-h1200dp-night-xhdpi")
     fun narrowLarge() = shoot("narrow_large", ready("gpu_state" to "err", "gpu_why" to "insmod", "gpu_was" to ""), fontScale = 1.3f)
 
-    /** Dialogs are windows of their own and are not in the picture, so these two only check that they open. */
     @Test
-    @Config(qualifiers = "w412dp-h1500dp-night-xhdpi")
-    fun helpOpens() {
-        shoot("help_tapped", ready(), tap = "?", tapIndex = 2)
-        rule.onNodeWithText("OK").assertExists()
-    }
+    @Config(qualifiers = "w340dp-h1900dp-night-xhdpi")
+    fun narrowLargeKeep() = shoot("narrow_large_keep", ready(*all), fontScale = 1.3f, open = Tile.KEEP)
 
     @Test
-    @Config(qualifiers = "w412dp-h1500dp-night-xhdpi")
+    @Config(qualifiers = "w412dp-h1300dp-night-xhdpi")
+    fun aTileOpensItsDetails() {
+        shoot("tile_tapped", ready(), tap = "Kept in RAM")
+        rule.onNodeWithText("System processes").assertExists()
+        rule.onNodeWithText("system_server").assertExists()
+    }
+
+    /** Dialogs are windows of their own and are not in the picture, so this only checks that it opens. */
+    @Test
+    @Config(qualifiers = "w412dp-h1000dp-night-xhdpi")
     fun applyAsksBeforeRestarting() {
         shoot("apply_tapped", ready(*fresh), tap = "Apply")
-        rule.onNodeWithText("Restart System UI and Home?").assertExists()
+        rule.onNodeWithText("Restart it now?").assertExists()
     }
 
     @Test

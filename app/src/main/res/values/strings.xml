@@ -1,4 +1,98 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Dejank</string>
+    <string name="app_name" translatable="false">Dejank</string>
+    <string name="title" translatable="false">One UI Dejank</string>
+    <string name="tagline">Memory fixes for animation stutter</string>
+    <string name="headline_paused">Paused.</string>
+    <string name="tile_gpu">GPU memory</string>
+    <string name="tile_reserve">Free reserve</string>
+    <string name="tile_keep">Kept in RAM</string>
+    <string name="off">Off</string>
+    <string name="not_applied">Not applied</string>
+    <string name="in_effect">In effect</string>
+    <string name="gpu_switch">Take smaller blocks, don\'t wait</string>
+    <string name="gpu_short_on">No waiting</string>
+    <string name="gpu_on">Driver threshold %1$d → 0</string>
+    <string name="gpu_on_never">This driver never waited</string>
+    <string name="gpu_na_driver">No Adreno driver on this phone</string>
+    <string name="gpu_na_setting">Not needed: this driver never waits</string>
+    <string name="gpu_na_kernel">No build for this kernel</string>
+    <string name="gpu_na_series">No build for %1$s yet</string>
+    <string name="gpu_err">The kernel refused the module</string>
+    <string name="gpu_about">When large free blocks run out, the Adreno driver makes the kernel free memory on the spot, and the thread drawing the frame waits. This loads a small kernel module that tells the driver to take smaller blocks instead.</string>
+    <string name="gpu_cost">GPU memory is built from smaller blocks more often.</string>
+    <string name="reserve_switch">Free memory earlier</string>
+    <string name="reserve_short_on">Scale %1$d</string>
+    <string name="reserve_on">Watermark scale %1$d → %2$d</string>
+    <string name="reserve_on_plain">Watermark scale %1$d</string>
+    <string name="reserve_na">Not available on this kernel</string>
+    <string name="reserve_about">Android keeps a small reserve of free memory. When apps use it up faster than it is refilled, they wait while memory is freed. This starts freeing at about 3 percent of RAM free instead of under 1 percent.</string>
+    <string name="reserve_cost">That memory is not used for cache or background apps.</string>
+    <string name="keep_short_on">%1$s kept</string>
+    <string name="keep_total">%1$s of %2$s kept</string>
+    <string name="keep_count">%1$d of %2$d switched on</string>
+    <string name="keep_about">Under memory pressure Android drops or compresses parts of these processes, and a frame waits while they are read back. Each one you switch on lives in a memory group that is never swapped, and what it works with is never reclaimed.</string>
+    <string name="keep_cost">That memory is not available to other apps.</string>
+    <string name="keep_na_official">This Android already keeps them in RAM itself</string>
+    <string name="keep_na_controller">No memory controller on this kernel</string>
+    <string name="keep_apps">Apps</string>
+    <string name="keep_apps_hint">Each restarts once when switched on.</string>
+    <string name="keep_system">System processes</string>
+    <string name="keep_system_hint">Moved as they are: only what they read from then on is kept.</string>
+    <string name="keep_ui">System UI</string>
+    <string name="keep_ui_role">Status bar, panels, transitions</string>
+    <string name="keep_home">Home app</string>
+    <string name="keep_home_role">Home screen and recents</string>
+    <string name="keep_sf" translatable="false">SurfaceFlinger</string>
+    <string name="keep_sf_role">Composes every frame</string>
+    <string name="keep_composer">Display composer</string>
+    <string name="keep_composer_role">Hands each frame to the screen</string>
+    <string name="keep_alloc">Graphics allocator</string>
+    <string name="keep_alloc_role">Hands out frame buffers</string>
+    <string name="keep_server" translatable="false">system_server</string>
+    <string name="keep_server_role">Windows, input, app switching</string>
+    <string name="kept_on">Kept, %1$s</string>
+    <string name="kept_settling">Settling, %1$s</string>
+    <string name="kept_plain">Kept</string>
+    <string name="kept_wait">Waiting for it to start</string>
+    <string name="kept_none">Not on this phone</string>
+    <string name="what_it_costs">What it costs</string>
+    <string name="pending_title">Not applied yet</string>
+    <string name="pending_text">What is switched on is not in effect yet.</string>
+    <string name="apply">Apply</string>
+    <string name="paused_title">Paused</string>
+    <string name="paused_text">The last start didn\'t finish, so nothing was applied.</string>
+    <string name="resume">Resume</string>
+    <string name="update_title">Update the app</string>
+    <string name="update_text">The installed module is a different version from this app.</string>
+    <string name="restart_title">Restart it now?</string>
+    <string name="restart_text">System UI or the home app restarts once so that all of its memory is kept. The screen flickers for a few seconds.</string>
+    <string name="restart">Restart</string>
+    <string name="cancel">Cancel</string>
+    <string name="back">Back</string>
+    <string name="retry">Retry</string>
+    <string name="theme_dark">Dark</string>
+    <string name="theme_system">System</string>
+    <string name="theme_light">Light</string>
+    <string name="copy_report">Copy report</string>
+    <string name="source">Source</string>
+    <string name="undo_hint">Nothing is written to the system partitions. Switching something off undoes it.</string>
+    <string name="no_root_title">No root access</string>
+    <string name="no_root_text">Allow Dejank in your root manager\'s superuser list, then retry.</string>
+    <string name="no_module_title">Module not found</string>
+    <string name="no_module_text">Install the One UI Dejank zip in your root manager. This app is its control panel.</string>
+    <string name="broken_title">The module didn\'t answer</string>
+    <string name="broken_text">The control script returned no status.</string>
+    <string name="msg_failed">That didn\'t work</string>
+    <string name="msg_resumed">Resumed</string>
+    <string name="msg_report_copied">Report copied</string>
+    <string name="msg_report_failed">Can\'t read the report. Check root access.</string>
+    <plurals name="fixes_working">
+        <item quantity="one">%d fix is working.</item>
+        <item quantity="other">%d fixes are working.</item>
+    </plurals>
+    <plurals name="fixes_off">
+        <item quantity="one">%d is switched off.</item>
+        <item quantity="other">%d are switched off.</item>
+    </plurals>
 </resources>

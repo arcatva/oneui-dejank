@@ -31,8 +31,9 @@ class MainViewModel : ViewModel() {
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
-    val messages: SharedFlow<String> = _messages.asSharedFlow()
+    /** String resources to show the user once. */
+    private val _messages = MutableSharedFlow<Int>(extraBufferCapacity = 8)
+    val messages: SharedFlow<Int> = _messages.asSharedFlow()
 
     private val mutex = Mutex()
 
@@ -53,49 +54,37 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch { refresh() }
     }
 
-    fun set(fix: Fix, on: Boolean) = act { status ->
-        if (Ctl.set(fix, on)) null else status()?.line(fix) ?: "That didn't work"
-    }
+    /** [key] is the name dejank.sh knows a switch by. */
+    fun set(key: String, on: Boolean) = act { if (Ctl.set(key, on)) null else R.string.msg_failed }
 
-    fun apply() = act { if (Ctl.apply()) null else "That didn't work" }
+    fun apply() = act { if (Ctl.apply()) null else R.string.msg_failed }
 
-    fun resume() = act { if (Ctl.resume()) "Resumed" else "That didn't work" }
+    fun resume() = act { if (Ctl.resume()) R.string.msg_resumed else R.string.msg_failed }
 
     /** Hands [onReady] the report on the main thread. */
     fun report(onReady: (String) -> Unit) {
         viewModelScope.launch {
             val text = Ctl.report()
             if (text.isBlank()) {
-                _messages.tryEmit("Can't read the report. Check root access.")
+                _messages.tryEmit(R.string.msg_report_failed)
             } else {
                 onReady(text)
-                _messages.tryEmit("Report copied")
+                _messages.tryEmit(R.string.msg_report_copied)
             }
         }
     }
 
     /**
-     * Runs one command, then reads the state again. [block] returns what to
-     * tell the user, or null for nothing; it can read the fresh state first.
+     * Runs one command, then reads the state again. [block] returns the
+     * message to show the user, or null for nothing.
      */
-    private fun act(block: suspend (status: suspend () -> Status?) -> String?) {
+    private fun act(block: suspend () -> Int?) {
         viewModelScope.launch {
             _state.update { it.copy(busy = true) }
-            val message = mutex.withLock {
-                block {
-                    refreshLocked()
-                    (_state.value.screen as? Screen.Ready)?.status
-                }
-            }
+            val message = mutex.withLock { block() }
             refresh()
             _state.update { it.copy(busy = false) }
             message?.let { _messages.tryEmit(it) }
-        }
-    }
-
-    private suspend fun refreshLocked() {
-        (Ctl.status() as? Ctl.Probe.Ok)?.let { ok ->
-            _state.update { it.copy(screen = Screen.Ready(ok.status)) }
         }
     }
 }
