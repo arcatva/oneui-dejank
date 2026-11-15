@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -83,9 +83,11 @@ jobs:
         run: |
           version=$(sed -n 's/^version=//p' module/module.prop)
           code=$(sed -n 's/^versionCode=//p' module/module.prop)
+          [ "$(jq -r '.metamodule | type' module.json)" = boolean ] || { echo "module.json: metamodule must be true or false"; exit 1; }
+          # a test build on the next branch has a version of its own and is announced nowhere
+          if [ "$GITHUB_REF" = refs/heads/next ]; then exit 0; fi
           [ "$(jq -r .version update.json)" = "$version" ] || { echo "update.json: version is not $version"; exit 1; }
           [ "$(jq -r .versionCode update.json)" = "$code" ] || { echo "update.json: versionCode is not $code"; exit 1; }
-          [ "$(jq -r '.metamodule | type' module.json)" = boolean ] || { echo "module.json: metamodule must be true or false"; exit 1; }
           grep -q "^## $version\$" CHANGELOG.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
           case $GITHUB_REF in refs/tags/*)
             [ "$GITHUB_REF_NAME" = "$version" ] || { echo "tag $GITHUB_REF_NAME is not $version"; exit 1; } ;;
@@ -159,6 +161,13 @@ jobs:
           name: oneui-dejank
           path: out/
 
+      # A test build: the zip goes to the "latest" pre-release, which no updater reads.
+      - name: Test build
+        if: github.ref == 'refs/heads/next'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload latest out/*.zip --clobber
+
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -193,16 +202,18 @@ jobs:
         # --rerun: a result taken from the build cache writes no pictures
         run: ./gradlew :app:testDebugUnitTest --rerun -Pscreenshots --tests '*ScreenshotTest*'
 
-      # kept on a branch of their own, replaced by every build of main
+      # kept on a branch of their own, replaced by every build of main (renders) or next (renders-next)
       - name: Publish renders
-        if: always() && github.ref == 'refs/heads/main'
+        if: always() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd app/build/screenshots || exit 0
-          git init -q -b renders
+          to=renders
+          [ "$GITHUB_REF" = refs/heads/next ] && to=renders-next
+          git init -q -b "$to"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -q -m "Renders of ${GITHUB_SHA}"
-          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" renders
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "$to"

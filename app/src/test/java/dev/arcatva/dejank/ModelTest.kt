@@ -9,11 +9,12 @@ import org.junit.Test
 class ModelTest {
     private fun status(vararg change: Pair<String, String>): Status {
         val map = linkedMapOf(
-            "api" to "1", "version" to "v0.1.0", "build" to "1", "paused" to "0",
+            "api" to "2", "version" to "v0.1.0", "build" to "1", "paused" to "0",
             "gpu" to "1", "gpu_state" to "on", "gpu_why" to "", "gpu_was" to "2",
             "reserve" to "1", "reserve_state" to "on", "reserve_now" to "300", "reserve_stock" to "73",
             "pin" to "1", "pin_state" to "on", "pin_apps" to "2", "pin_in" to "2",
             "pin_kb" to "641292", "pin_swap_kb" to "0",
+            "sys" to "0", "sys_state" to "off", "sys_in" to "0", "sys_kb" to "",
         )
         change.forEach { (k, v) -> map[k] = v }
         return parseStatus(map.entries.joinToString("\n") { "${it.key}=${it.value}" })!!
@@ -28,7 +29,7 @@ class ModelTest {
     @Test
     fun `everything on`() {
         val s = status()
-        assertEquals("3 of 3 fixes active", s.headline())
+        assertEquals("3 of 4 fixes active", s.headline())
         assertFalse(s.anyPending)
         assertEquals("Active · driver threshold 2 → 0", s.line(Fix.GPU))
         assertEquals("Active · scale 73 → 300", s.line(Fix.RESERVE))
@@ -39,9 +40,10 @@ class ModelTest {
     @Test
     fun `right after installing nothing is applied`() {
         val s = status("gpu_state" to "off", "gpu_was" to "", "reserve_state" to "off", "reserve_now" to "73", "pin_state" to "off")
-        assertEquals("0 of 3 fixes active", s.headline())
+        assertEquals("0 of 4 fixes active", s.headline())
         assertTrue(s.anyPending)
-        Fix.entries.forEach {
+        assertEquals("Off", s.line(Fix.SYS))
+        Fix.entries.filter { it != Fix.SYS }.forEach {
             assertEquals("Not applied", s.line(it))
             assertEquals(Tone.WAITING, s.tone(it))
         }
@@ -53,7 +55,7 @@ class ModelTest {
         assertEquals("Off", s.line(Fix.GPU))
         assertEquals(Tone.IDLE, s.tone(Fix.GPU))
         assertFalse(s.anyPending)
-        assertEquals("2 of 3 fixes active", s.headline())
+        assertEquals("2 of 4 fixes active", s.headline())
     }
 
     @Test
@@ -90,6 +92,22 @@ class ModelTest {
             status("pin_swap_kb" to "20480").line(Fix.PIN),
         )
         assertEquals("No memory controller on this kernel", status("pin_state" to "na").line(Fix.PIN))
+    }
+
+    @Test
+    fun `the system process is off until asked for, and has no restart to wait for`() {
+        assertEquals("Off", status().line(Fix.SYS))
+        assertEquals(Tone.IDLE, status().tone(Fix.SYS))
+        val on = status("sys" to "1", "sys_state" to "on", "sys_in" to "1", "sys_kb" to "421888")
+        assertEquals("Kept · 412 MB in RAM", on.line(Fix.SYS))
+        assertEquals(Tone.GOOD, on.tone(Fix.SYS))
+        assertEquals("4 of 4 fixes active", on.headline())
+        assertEquals(
+            "Waiting for system_server",
+            status("sys" to "1", "sys_state" to "on", "sys_in" to "0").line(Fix.SYS),
+        )
+        assertEquals("No memory controller on this kernel", status("sys_state" to "na").line(Fix.SYS))
+        assertTrue(status("sys" to "1", "sys_state" to "off").anyPending)
     }
 
     @Test

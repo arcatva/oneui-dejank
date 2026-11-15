@@ -124,7 +124,7 @@ ctl() {
     rc=$?
     # "pin on" leaves a watcher behind; here it does two rounds and goes, and
     # the checks wait for that so they never read a file it is writing
-    case "$1 $2 $3" in "set pin 1" | apply* | resume*) sleep 0.4 ;; esac
+    case "$1 $2 $3" in "set pin 1" | "set sys 1" | apply* | resume*) sleep 0.4 ;; esac
     return $rc
 }
 
@@ -144,7 +144,7 @@ logged() { if grep -q -- "$2" "$DATA/log" 2>/dev/null; then ok; else bad "$1 -> 
 # ---------------------------------------------------------- a fresh phone
 phone
 S=$(ctl status)
-has "api" "$S" "api=1"
+has "api" "$S" "api=2"
 has "version" "$S" "version=$(sed -n 's/^version=//p' "$SRC/module.prop")"
 has "build" "$S" "build=$(sed -n 's/^versionCode=//p' "$SRC/module.prop")"
 has "everything is wanted by default" "$S" "gpu=1"
@@ -154,6 +154,8 @@ has "gpu not applied yet" "$S" "gpu_state=off"
 has "reserve not applied yet" "$S" "reserve_state=off"
 has "reserve shows the phone's value" "$S" "reserve_now=73"
 has "pin not applied yet" "$S" "pin_state=off"
+has "sys is off unless asked for" "$S" "sys=0"
+has "sys not applied" "$S" "sys_state=off"
 has "not paused" "$S" "paused=0"
 [ ! -e "$DATA/conf" ] && ok || bad "status saves nothing"
 
@@ -321,6 +323,93 @@ app com.android.systemui 100 5000
 ctl watch
 [ ! -d "$CG/dejank" ] && ok || bad "watcher with pin off made a group"
 
+# ---------------------------------------------------------- sys
+phone
+echo "cpu io" >"$CG/cgroup.controllers"
+has "no memory controller" "$(ctl status)" "sys_state=na"
+expect "cannot be switched on" "$(ctl set sys 1)" "error=failed"
+
+# server <pid>: a system_server that has run since boot, in Android's own group
+server() {
+    app system_server "$1" 300
+    mkdir -p "$CG/system/uid_1000/pid_$1"
+    : >"$CG/system/uid_1000/pid_$1/cgroup.procs"
+    echo "0::/system/uid_1000/pid_$1" >"$PROC/$1/cgroup"
+}
+
+phone
+server 50
+app com.android.systemui 100 5000
+app com.example.home 200 6000
+expect "sys on" "$(ctl set sys 1)" "ok=1"
+expect "the controller is switched on at the root" "$(cat "$CG/cgroup.subtree_control")" "+memory"
+expect "never reclaimed" "$(cat "$CG/dejank-sys/memory.min")" "max"
+expect "never swapped" "$(cat "$CG/dejank-sys/memory.swap.max")" "0"
+expect "system_server is in its group" "$(cat "$CG/dejank-sys/cgroup.procs")" "50"
+expect "where it came from is noted" "$(cat "$RUN/origin.50")" "/system/uid_1000/pid_50"
+not_called "nothing is ever restarted for it" "kill"
+[ ! -d "$CG/dejank" ] && ok || bad "sys on applied pin as well"
+expect "the switch is saved" "$(grep '^SYS=' "$DATA/conf")" "SYS=1"
+logged "sys is logged" "sys: on"
+S=$(ctl status)
+has "sys is wanted" "$S" "sys=1"
+has "sys is on" "$S" "sys_state=on"
+has "system_server is in" "$S" "sys_in=1"
+has "memory kept" "$S" "sys_kb=641292"
+has "nothing swapped" "$S" "sys_swap_kb=0"
+has "pin is still not applied" "$S" "pin_state=off"
+
+# both on: each in its own group
+ctl set pin 1 >/dev/null
+expect "System UI and Home are in theirs" "$(sort "$CG/dejank/cgroup.procs" | tr '\n' ' ')" "101 201 "
+expect "system_server stays in its own" "$(cat "$CG/dejank-sys/cgroup.procs")" "50"
+not_called "and is not restarted" "kill 50"
+
+# a system_server that came back is brought in by the watcher
+server 60
+has "the new one is outside" "$(ctl status)" "sys_in=0"
+ctl watch keep
+S=$(ctl status)
+has "the watcher moved it" "$S" "sys_in=1"
+has "and left the apps where they are" "$S" "pin_in=2"
+not_called "without restarting anything" "kill 60"
+
+# switching one off leaves the other
+expect "pin off" "$(ctl set pin 0)" "ok=1"
+[ ! -d "$CG/dejank" ] && ok || bad "the pin group is removed"
+has "sys is still on" "$(ctl status)" "sys_state=on"
+expect "the controller stays while one group is left" "$(cat "$CG/cgroup.subtree_control")" "+memory"
+[ -f "$RUN/watch.token" ] && ok || bad "the watcher is stopped although sys is on"
+expect "sys off" "$(ctl set sys 0)" "ok=1"
+[ ! -d "$CG/dejank-sys" ] && ok || bad "the sys group is removed"
+expect "system_server is back where it came from" "$(cat "$CG/system/uid_1000/pid_60/cgroup.procs")" "60"
+expect "the controller is switched off again" "$(cat "$CG/cgroup.subtree_control")" "-memory"
+[ ! -e "$RUN/watch.token" ] && ok || bad "the watcher is left running"
+has "sys is off" "$(ctl status)" "sys_state=off"
+logged "sys off is logged" "sys: off"
+
+# at boot the watcher sets up what is switched on, system_server included
+phone
+server 50
+app com.android.systemui 100 99500
+mkdir -p "$DATA" && printf 'PIN=1\nSYS=1\n' >"$DATA/conf"
+ctl watch
+S=$(ctl status)
+has "boot: sys" "$S" "sys_state=on"
+has "boot: system_server is in" "$S" "sys_in=1"
+has "boot: pin" "$S" "pin_state=on"
+not_called "boot: system_server is not restarted" "kill 50"
+
+# sys alone at boot
+phone
+server 50
+app com.android.systemui 100 5000
+mkdir -p "$DATA" && printf 'PIN=0\nSYS=1\n' >"$DATA/conf"
+ctl watch
+has "boot, sys only: on" "$(ctl status)" "sys_in=1"
+[ ! -d "$CG/dejank" ] && ok || bad "boot, sys only: made the pin group"
+not_called "boot, sys only: nothing restarted" "kill"
+
 # ---------------------------------------------------------- start-up guard
 phone
 ctl guard
@@ -358,6 +447,12 @@ has "reserve is applied" "$S" "reserve_state=on"
 has "pin is left to the watcher" "$S" "pin_state=off"
 expect "apply now" "$(ctl apply)" "ok=1"
 has "pin is applied" "$(ctl status)" "pin_state=on"
+has "sys stays off unless switched on" "$(ctl status)" "sys_state=off"
+ctl set sys 1 >/dev/null
+ctl set sys 0 >/dev/null
+printf 'GPU=0\nRESERVE=1\nPIN=1\nSYS=1\n' >"$DATA/conf"
+expect "apply with sys wanted" "$(ctl apply)" "ok=1"
+has "sys is applied" "$(ctl status)" "sys_state=on"
 
 # ---------------------------------------------------------- settings file
 phone
@@ -367,6 +462,7 @@ S=$(ctl status)
 has "a saved 0 is read" "$S" "gpu=0"
 has "anything but 0 or 1 is ignored" "$S" "reserve=1"
 has "a value that is a command is ignored" "$S" "pin=1"
+has "a missing key keeps its default" "$S" "sys=0"
 [ ! -e "$T/executed" ] && ok || bad "something in the settings file was executed"
 expect "unknown switch" "$(ctl set blur 1)" "error=name"
 expect "unknown value" "$(ctl set gpu 2)" "error=value"

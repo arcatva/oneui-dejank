@@ -1,7 +1,7 @@
 package dev.arcatva.dejank
 
 /** The version of dejank.sh's status output this app understands. */
-const val EXPECTED_API = 1
+const val EXPECTED_API = 2
 
 enum class ThemeChoice(val label: String) {
     DARK("Dark"),
@@ -39,7 +39,7 @@ enum class FixState {
 /** How a state line is coloured. */
 enum class Tone { GOOD, IDLE, WAITING, BAD }
 
-/** The three fixes. [key] is the name dejank.sh knows each by. */
+/** The fixes. [key] is the name dejank.sh knows each by. */
 enum class Fix(val key: String, val title: String, val summary: String, val help: String) {
     GPU(
         "gpu",
@@ -69,7 +69,18 @@ enum class Fix(val key: String, val title: String, val summary: String, val help
             "any other app. Opening the panel or going home then waits while they are read back.\n\n" +
             "This moves both into a memory group the kernel may not reclaim or swap. They restart once " +
             "so that all their memory starts inside the group.\n\n" +
-            "Cost: their memory, usually 0.6 to 1 GB, is never freed for other apps.",
+            "Cost: their memory is never freed for other apps. The line below shows how much that is.",
+    ),
+    SYS(
+        "sys",
+        "Keep the system in RAM",
+        "Android's system process keeps what it reads in RAM, so opening and switching apps doesn't wait for it.",
+        "Every app launch and switch goes through system_server. Under memory pressure parts of it are " +
+            "dropped, and it reads them back from storage while the app drawing the frame waits for it.\n\n" +
+            "This moves system_server into a second memory group the kernel may not reclaim or swap. It " +
+            "cannot be restarted, so only what it reads from then on is protected.\n\n" +
+            "Cost: that memory is never freed for other apps. New and still being measured, so it is off " +
+            "until you switch it on.",
     ),
 }
 
@@ -94,6 +105,9 @@ data class Status(
     val pinIn: Int = 0,
     val pinKb: Long? = null,
     val pinSwapKb: Long? = null,
+    /** system_server is in its group. */
+    val sysIn: Boolean = false,
+    val sysKb: Long? = null,
 ) {
     fun wanted(fix: Fix): Boolean = wanted[fix] == true
 
@@ -154,6 +168,14 @@ data class Status(
                 }
                 else -> "No memory controller on this kernel"
             }
+
+            Fix.SYS -> when (state) {
+                FixState.ON -> buildString {
+                    append(if (sysIn) "Kept" else "Waiting for system_server")
+                    sysKb?.let { append(" · ${megabytes(it)} in RAM") }
+                }
+                else -> "No memory controller on this kernel"
+            }
         }
     }
 }
@@ -184,5 +206,7 @@ fun parseStatus(text: String): Status? {
         pinIn = map["pin_in"]?.toIntOrNull() ?: 0,
         pinKb = map["pin_kb"]?.toLongOrNull(),
         pinSwapKb = map["pin_swap_kb"]?.toLongOrNull(),
+        sysIn = map["sys_in"] == "1",
+        sysKb = map["sys_kb"]?.toLongOrNull(),
     )
 }
