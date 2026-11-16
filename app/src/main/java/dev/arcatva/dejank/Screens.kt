@@ -403,9 +403,9 @@ private fun ColumnScope.FixDetail(tile: Tile, status: Status, busy: Boolean, act
             val usable = status.state(fix) != FixState.NA
             SwitchRow(
                 title = stringResource(fix.switch),
-                summary = status.note(fix)?.text(),
+                // what is wrong with it, or else what it has done so far
+                summary = (status.note(fix) ?: status.value(fix))?.text(),
                 summaryColor = status.tone(fix).color(),
-                value = status.value(fix)?.text(),
                 checked = usable && status.wanted(fix),
                 enabled = usable && !busy,
                 onToggle = { actions.set(fix.key, it) },

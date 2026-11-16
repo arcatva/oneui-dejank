@@ -213,7 +213,7 @@ data class Status(
     private fun noBuild(): Line =
         if (gpuSeries.isEmpty()) lineOf(R.string.gpu_na_kernel) else lineOf(R.string.gpu_na_series, gpuSeries)
 
-    /** Next to a fix's switch: what it has done so far. Null when there is nothing to count. */
+    /** Under a fix's switch while it is on: what it has done so far. Null when there is nothing to count. */
     fun value(fix: Fix): Line? {
         if (fix != Fix.KVMALLOC || state(fix) != FixState.ON) return null
         return kvmallocSent?.let { countOf(R.plurals.kvmalloc_sent, it.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()) }
