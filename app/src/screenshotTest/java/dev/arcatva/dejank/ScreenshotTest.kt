@@ -41,8 +41,9 @@ class ScreenshotTest {
 
     private fun status(vararg change: Pair<String, String>): Status {
         val map = linkedMapOf(
-            "api" to "3", "version" to "v0.2.0", "build" to "4", "paused" to "0",
+            "api" to "4", "version" to "v0.2.0", "build" to "4", "paused" to "0",
             "gpu" to "1", "gpu_state" to "on", "gpu_why" to "", "gpu_was" to "2",
+            "kvmalloc" to "0", "kvmalloc_state" to "off", "kvmalloc_why" to "", "kvmalloc_seen" to "", "kvmalloc_sent" to "",
             "reserve" to "1", "reserve_state" to "on", "reserve_now" to "300", "reserve_stock" to "73",
             "keep_why" to "", "mem_total_kb" to "11351040",
             "ui" to "1", "ui_state" to "on", "ui_kb" to "861184", "ui_min_kb" to "798720",
@@ -154,6 +155,27 @@ class ScreenshotTest {
     @Config(qualifiers = "zh-rCN-w412dp-h1000dp-night-xhdpi")
     fun freshInstallChinese() = shoot("fresh_install_zh", ready(*fresh))
 
+    private val hooked = arrayOf("kvmalloc" to "1", "kvmalloc_state" to "on", "kvmalloc_seen" to "1300", "kvmalloc_sent" to "1234")
+
+    /** Both switches of the tile on: the second one counts what it has done. */
+    @Test
+    @Config(qualifiers = "w412dp-h800dp-night-xhdpi")
+    fun gpuDetailBoth() = shoot("gpu_detail_both", ready(*hooked), open = Tile.GPU)
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w412dp-h800dp-night-xhdpi")
+    fun gpuDetailBothChinese() = shoot("gpu_detail_both_zh", ready(*hooked), open = Tile.GPU)
+
+    /** The phone restarted right after the second switch: it is off again and says why. */
+    @Test
+    @Config(qualifiers = "zh-rCN-w412dp-h800dp-night-xhdpi")
+    fun gpuDetailTrippedChinese() =
+        shoot("gpu_detail_tripped_zh", ready("kvmalloc_state" to "err", "kvmalloc_why" to "reboot"), open = Tile.GPU)
+
+    @Test
+    @Config(qualifiers = "w340dp-h900dp-night-xhdpi")
+    fun narrowLargeGpu() = shoot("narrow_large_gpu", ready(*hooked), fontScale = 1.3f, open = Tile.GPU)
+
     /** The kernel refused the module: the switch says so in one line. */
     @Test
     @Config(qualifiers = "w412dp-h800dp-night-xhdpi")
@@ -181,6 +203,7 @@ class ScreenshotTest {
 
     private val official = arrayOf(
         "gpu_state" to "na", "gpu_why" to "kernel", "gpu_series" to "android15-6.6", "gpu_was" to "",
+        "kvmalloc_state" to "na", "kvmalloc_why" to "kernel",
         "keep_why" to "official",
         "ui_state" to "na", "home_state" to "na", "sf_state" to "na",
         "composer_state" to "na", "alloc_state" to "na", "server_state" to "na",

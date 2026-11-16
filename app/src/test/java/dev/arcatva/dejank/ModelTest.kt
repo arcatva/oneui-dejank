@@ -9,8 +9,9 @@ import org.junit.Test
 class ModelTest {
     private fun status(vararg change: Pair<String, String>): Status {
         val map = linkedMapOf(
-            "api" to "3", "version" to "v0.2.0", "build" to "4", "paused" to "0",
+            "api" to "4", "version" to "v0.2.0", "build" to "4", "paused" to "0",
             "gpu" to "1", "gpu_state" to "on", "gpu_why" to "", "gpu_was" to "2",
+            "kvmalloc" to "0", "kvmalloc_state" to "off", "kvmalloc_why" to "", "kvmalloc_seen" to "", "kvmalloc_sent" to "",
             "reserve" to "1", "reserve_state" to "on", "reserve_now" to "300", "reserve_stock" to "73",
             "keep_why" to "", "mem_total_kb" to "11351040",
             "ui" to "1", "ui_state" to "on", "ui_kb" to "861184", "ui_min_kb" to "798720",
@@ -76,10 +77,13 @@ class ModelTest {
         assertEquals(0, s.working)
         assertTrue(s.anyPending)
         assertTrue(s.applyRestarts)
-        Fix.entries.forEach {
+        listOf(Fix.GPU, Fix.RESERVE).forEach {
             assertEquals(lineOf(R.string.not_applied), s.note(it))
             assertEquals(Tone.WAITING, s.tone(it))
         }
+        // off unless someone switches it on
+        assertNull(s.note(Fix.KVMALLOC))
+        assertEquals(Tone.IDLE, s.tone(Fix.KVMALLOC))
         assertEquals(lineOf(R.string.not_applied), s.short(Tile.GPU))
         assertEquals(lineOf(R.string.not_applied), s.value(Keep.HOME))
         assertEquals(lineOf(R.string.not_applied), s.short(Tile.KEEP))
@@ -151,6 +155,48 @@ class ModelTest {
         assertEquals(lineOf(R.string.failed), refused.short(Tile.GPU))
         assertEquals(Tone.BAD, refused.tone(Tile.GPU))
         assertEquals(2, refused.working)
+    }
+
+    @Test
+    fun `the hook into kvmalloc is a second switch of the GPU tile`() {
+        assertEquals(listOf(Fix.GPU, Fix.KVMALLOC), Tile.GPU.fixes)
+        val on = status("kvmalloc" to "1", "kvmalloc_state" to "on", "kvmalloc_seen" to "1300", "kvmalloc_sent" to "1234")
+        assertNull(on.note(Fix.KVMALLOC))
+        assertEquals(Tone.GOOD, on.tone(Fix.KVMALLOC))
+        assertEquals(countOf(R.plurals.kvmalloc_sent, 1234), on.value(Fix.KVMALLOC))
+        assertNull(on.value(Fix.GPU))
+        // a tile is one of three however many of its switches are on
+        assertEquals(3, on.working)
+        val alone = status("gpu" to "0", "gpu_state" to "off", "kvmalloc" to "1", "kvmalloc_state" to "on")
+        assertEquals(lineOf(R.string.on), alone.short(Tile.GPU))
+        assertEquals(Tone.GOOD, alone.tone(Tile.GPU))
+        assertNull(alone.value(Fix.KVMALLOC))
+        val wanted = status("kvmalloc" to "1")
+        assertEquals(lineOf(R.string.not_applied), wanted.note(Fix.KVMALLOC))
+        assertTrue(wanted.anyPending)
+        assertNull(wanted.value(Fix.KVMALLOC))
+    }
+
+    @Test
+    fun `why the hook into kvmalloc is not there`() {
+        val newer = status("kvmalloc_state" to "na", "kvmalloc_why" to "builtin")
+        assertEquals(lineOf(R.string.kvmalloc_na_builtin), newer.note(Fix.KVMALLOC))
+        val older = status("kvmalloc_state" to "na", "kvmalloc_why" to "kernel", "gpu_series" to "android15-6.6")
+        assertEquals(lineOf(R.string.gpu_na_series, "android15-6.6"), older.note(Fix.KVMALLOC))
+        val bare = status("kvmalloc_state" to "na", "kvmalloc_why" to "hook")
+        assertEquals(lineOf(R.string.reserve_na), bare.note(Fix.KVMALLOC))
+        // none of this is the tile's business while its first fix works
+        assertEquals(lineOf(R.string.on), bare.short(Tile.GPU))
+        val refused = status("kvmalloc" to "1", "kvmalloc_state" to "err", "kvmalloc_why" to "insmod")
+        assertEquals(lineOf(R.string.gpu_err), refused.note(Fix.KVMALLOC))
+        assertEquals(lineOf(R.string.failed), refused.short(Tile.GPU))
+        assertEquals(Tone.BAD, refused.tone(Tile.GPU))
+        // the phone went down after the switch: it is off again and says why, the tile carries on
+        val tripped = status("kvmalloc" to "0", "kvmalloc_state" to "err", "kvmalloc_why" to "reboot")
+        assertEquals(lineOf(R.string.kvmalloc_err_reboot), tripped.note(Fix.KVMALLOC))
+        assertEquals(Tone.BAD, tripped.tone(Fix.KVMALLOC))
+        assertEquals(lineOf(R.string.on), tripped.short(Tile.GPU))
+        assertFalse(tripped.anyPending)
     }
 
     @Test

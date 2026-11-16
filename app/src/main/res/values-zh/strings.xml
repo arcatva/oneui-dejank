@@ -25,6 +25,13 @@
     <string name="gpu_na_series">暂未适配 %1$s</string>
     <string name="gpu_err">内核拒绝加载模块</string>
 
+    <string name="kvmalloc_switch">大块内核分配改用 vmalloc</string>
+    <string name="kvmalloc_na_builtin">当前内核已内置</string>
+    <string name="kvmalloc_err_reboot">开启后设备重启，已关闭</string>
+    <plurals name="kvmalloc_sent">
+        <item quantity="other">%,d 次</item>
+    </plurals>
+
     <string name="reserve_switch">提高内存回收水位</string>
     <string name="reserve_about">空闲内存降至约 3% 时即开始后台回收，默认为不足 1%。</string>
     <string name="reserve_na">当前内核不支持</string>

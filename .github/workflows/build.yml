@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build kgsl_nowait.ko
+      - name: Build the kernel modules
         env:
           KMI: ${{ matrix.kmi }}
         run: |
@@ -52,12 +52,24 @@ jobs:
             CLANG=$(echo /opt/ddk/clang/clang-r*/bin)
             echo "kernel: $K, release $(cat $K/include/config/kernel.release 2>/dev/null)"; echo "clang: $CLANG"
             make -C $K M=/work ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=$CLANG/clang LD=$CLANG/ld.lld AR=$CLANG/llvm-ar NM=$CLANG/llvm-nm OBJCOPY=$CLANG/llvm-objcopy OBJDUMP=$CLANG/llvm-objdump STRIP=$CLANG/llvm-strip CROSS_COMPILE=aarch64-linux-gnu- modules
-            $CLANG/llvm-strip --strip-debug /work/kgsl_nowait.ko
-            # phones ship their modules without BTF; one built against other headers could only fail to validate
-            $CLANG/llvm-objcopy --remove-section=.BTF --remove-section=.BTF.base /work/kgsl_nowait.ko
+            for ko in /work/*.ko; do
+              $CLANG/llvm-strip --strip-debug $ko
+              # phones ship their modules without BTF; one built against other headers could only fail to validate
+              $CLANG/llvm-objcopy --remove-section=.BTF --remove-section=.BTF.base $ko
+            done
+            # what each module needs from the kernel, to be read in the log
+            for ko in /work/*.ko; do echo "$ko needs:"; $CLANG/llvm-nm -u $ko; done
           '
-          readelf -p .modinfo kmod/kgsl_nowait.ko
-          mkdir out && cp kmod/kgsl_nowait.ko "out/kgsl_nowait-$KMI.ko"
+          mkdir out
+          for ko in kmod/*.ko; do
+            readelf -p .modinfo "$ko"
+            name=${ko##*/}
+            cp "$ko" "out/${name%.ko}-$KMI.ko"
+          done
+          ls -la out
+          [ -f "out/kgsl_nowait-$KMI.ko" ]
+          # the hook into kvmalloc() exists for one series only
+          if [ "$KMI" = android16-6.12 ]; then [ -f "out/kvmalloc_nowait-$KMI.ko" ]; fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -145,7 +157,9 @@ jobs:
       - name: Kernel modules in the zip
         run: |
           ls -la module/kmod
-          [ -f module/kmod/kgsl_nowait-android16-6.12.ko ] || { echo "the build for android16-6.12 is missing"; exit 1; }
+          for ko in kgsl_nowait kvmalloc_nowait; do
+            [ -f "module/kmod/$ko-android16-6.12.ko" ] || { echo "$ko: the build for android16-6.12 is missing"; exit 1; }
+          done
 
       - name: Package the module
         run: |

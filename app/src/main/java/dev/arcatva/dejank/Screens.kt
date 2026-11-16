@@ -390,26 +390,30 @@ private fun ColumnScope.Detail(
     actions: Actions,
 ) {
     when (tile) {
-        Tile.GPU -> FixDetail(Fix.GPU, status, busy, actions)
-        Tile.RESERVE -> FixDetail(Fix.RESERVE, status, busy, actions)
+        Tile.GPU, Tile.RESERVE -> FixDetail(tile, status, busy, actions)
         Tile.KEEP -> KeepDetail(status, busy, ask, actions)
     }
 }
 
-/** One switch and one sentence. */
+/** A switch for each fix of the tile and one sentence. */
 @Composable
-private fun ColumnScope.FixDetail(fix: Fix, status: Status, busy: Boolean, actions: Actions) {
-    val usable = status.state(fix) != FixState.NA
-    SwitchRow(
-        title = stringResource(fix.switch),
-        summary = status.note(fix)?.text(),
-        summaryColor = status.tone(fix).color(),
-        checked = usable && status.wanted(fix),
-        enabled = usable && !busy,
-        onToggle = { actions.set(fix.key, it) },
-        shape = segment(0, 1),
-    )
-    Hint(stringResource(fix.about), Modifier.padding(horizontal = 8.dp))
+private fun ColumnScope.FixDetail(tile: Tile, status: Status, busy: Boolean, actions: Actions) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        tile.fixes.forEachIndexed { i, fix ->
+            val usable = status.state(fix) != FixState.NA
+            SwitchRow(
+                title = stringResource(fix.switch),
+                summary = status.note(fix)?.text(),
+                summaryColor = status.tone(fix).color(),
+                value = status.value(fix)?.text(),
+                checked = usable && status.wanted(fix),
+                enabled = usable && !busy,
+                onToggle = { actions.set(fix.key, it) },
+                shape = segment(i, tile.fixes.size),
+            )
+        }
+    }
+    Hint(stringResource(tile.about), Modifier.padding(horizontal = 8.dp))
 }
 
 /** How much is kept, one sentence, and a switch per process. */

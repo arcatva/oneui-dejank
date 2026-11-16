@@ -9,6 +9,9 @@
 #
 # gpu      loads kgsl_nowait.ko: the Adreno driver takes a smaller block of
 #          memory at once instead of waiting for a large one
+# kvmalloc loads kvmalloc_nowait.ko: kernel requests of more than 32 KB that
+#          can do without contiguous memory take single pages at once
+#          instead of waiting for one block; off unless switched on
 # reserve  vm.watermark_scale_factor = 300: memory is freed in the background
 #          earlier, so apps rarely have to wait for it
 #
@@ -59,6 +62,11 @@ GUARD=$DATA/starting
 PAUSE=$DATA/paused
 WSF=$VM/watermark_scale_factor
 KPARAM=$SYSMOD/kgsl_nowait/parameters
+KVPARAM=$SYSMOD/kvmalloc_nowait/parameters
+KV_HOOK=__traceiter_android_vh_kvmalloc_node_use_vmalloc
+KV_TRY=$DATA/kvmalloc.trying   # the boot and second the hook was switched on in, until it has held
+KV_TRIP=$DATA/kvmalloc.tripped # the phone went down before that
+KV_HOLD=${KV_HOLD:-3}
 RESERVE_TARGET=300
 SYSTEMUI=com.android.systemui
 HOME_FALLBACK=com.sec.android.app.launcher
@@ -79,6 +87,7 @@ log() {
 # Only these keys with 0 or 1 are read; nothing in the file is executed.
 load_conf() {
     GPU=1
+    KV=0
     RESERVE=1
     K_ui=1
     K_home=1
@@ -94,6 +103,7 @@ load_conf() {
         case $v in 0 | 1) ;; *) continue ;; esac
         case $k in
         GPU) GPU=$v ;;
+        KVMALLOC) KV=$v ;;
         RESERVE) RESERVE=$v ;;
         KEEP_UI) K_ui=$v && c_new=1 ;;
         KEEP_HOME) K_home=$v && c_new=1 ;;
@@ -114,8 +124,8 @@ load_conf() {
 }
 
 save_conf() {
-    printf 'GPU=%s\nRESERVE=%s\nKEEP_UI=%s\nKEEP_HOME=%s\nKEEP_SF=%s\nKEEP_COMPOSER=%s\nKEEP_ALLOC=%s\nKEEP_SERVER=%s\n' \
-        "$GPU" "$RESERVE" "$K_ui" "$K_home" "$K_sf" "$K_composer" "$K_alloc" "$K_server" >"$CONF.tmp" && mv "$CONF.tmp" "$CONF"
+    printf 'GPU=%s\nKVMALLOC=%s\nRESERVE=%s\nKEEP_UI=%s\nKEEP_HOME=%s\nKEEP_SF=%s\nKEEP_COMPOSER=%s\nKEEP_ALLOC=%s\nKEEP_SERVER=%s\n' \
+        "$GPU" "$KV" "$RESERVE" "$K_ui" "$K_home" "$K_sf" "$K_composer" "$K_alloc" "$K_server" >"$CONF.tmp" && mv "$CONF.tmp" "$CONF"
 }
 
 # wanted <key>: is this switch on in the settings?
@@ -133,23 +143,48 @@ nap() {
     sleep "$NAP" 2>/dev/null || sleep 1
 }
 
+# detach <command>: this script once more, on its own and outliving the caller
+detach() {
+    if command -v setsid >/dev/null 2>&1; then
+        setsid sh "$0" "$@" </dev/null >/dev/null 2>&1 &
+    else
+        nohup sh "$0" "$@" </dev/null >/dev/null 2>&1 &
+    fi
+}
+
 # ----------------------------------------------------------------- gpu
 
 # KMI: the kernel series, e.g. android16-6.12 for release 6.12.58-android16-6-...
-# KO: the build of the kernel module for that series, or empty
-gpu_ko() {
-    KO=
+# KMAJ, KMIN: the kernel version, 6 and 12 there; empty when it cannot be read
+series() {
     KMI=
+    KMAJ=
+    KMIN=
     rel=$(uname -r 2>/dev/null)
+    kv=${rel%%-*}
+    case $kv in
+    [0-9]*.[0-9]*)
+        KMAJ=${kv%%.*}
+        KMIN=${kv#*.}
+        KMIN=${KMIN%%.*}
+        case $KMAJ$KMIN in *[!0-9]*) KMAJ= && KMIN= ;; esac
+        ;;
+    esac
     case $rel in
     [0-9]*.[0-9]*.*-android[0-9]*-*)
-        kv=${rel%%-*}
         kv=${kv%.*}
         gen=${rel#*-}
         gen=${gen%%-*}
         case $kv$gen in *[!a-z0-9.]*) ;; *) KMI=$gen-$kv ;; esac
         ;;
     esac
+    return 0
+}
+
+# KO: the build of the kernel module for this kernel series, or empty
+gpu_ko() {
+    KO=
+    series
     [ -n "$KMI" ] && [ -f "$MODDIR/kmod/kgsl_nowait-$KMI.ko" ] && KO=$MODDIR/kmod/kgsl_nowait-$KMI.ko
     return 0
 }
@@ -240,6 +275,116 @@ gpu_off() {
     [ -d "$SYSMOD/kgsl_nowait" ] || return 0
     rmmod kgsl_nowait 2>/dev/null || echo 0 >"$KPARAM/enabled" 2>/dev/null
     log "gpu: off"
+}
+
+# ------------------------------------------------------------ kvmalloc
+
+# Whether this kernel has Android's hook into kvmalloc(); asked once per boot.
+kv_hook() {
+    first "$RUN/kvmalloc.hook"
+    case $VAL in 0) return 1 ;; 1) return 0 ;; esac
+    [ -r "$PROC/kallsyms" ] || return 0
+    if grep -q " $KV_HOOK\$" "$PROC/kallsyms" 2>/dev/null; then
+        echo 1 >"$RUN/kvmalloc.hook"
+        return 0
+    fi
+    echo 0 >"$RUN/kvmalloc.hook"
+    return 1
+}
+
+# KV_STATE: on, off, err or na. KV_WHY:
+#   builtin  Linux 6.16 and later do not wait here in the first place
+#   kernel   there is no build for this kernel series
+#   hook     this kernel is without Android's hook
+#   insmod   the kernel did not take the module
+#   reboot   the phone went down right after the hook was switched on
+# KV_SEEN, KV_SENT: requests above the limit, and how many went to vmalloc()
+kv_state() {
+    KV_WHY=
+    KV_SEEN=
+    KV_SENT=
+    if [ -d "$KVPARAM" ]; then
+        first "$KVPARAM/seen" && KV_SEEN=$VAL
+        first "$KVPARAM/sent" && KV_SENT=$VAL
+        first "$KVPARAM/enabled"
+        if [ "$VAL" = 1 ]; then KV_STATE=on; else KV_STATE=off; fi
+        return 0
+    fi
+    KV_STATE=na
+    KVKO=
+    [ -n "$KMAJ" ] || series
+    if [ -n "$KMAJ" ] && { [ "$KMAJ" -gt 6 ] || { [ "$KMAJ" = 6 ] && [ "$KMIN" -ge 16 ]; }; }; then
+        KV_WHY=builtin
+        return 0
+    fi
+    [ -n "$KMI" ] && [ -f "$MODDIR/kmod/kvmalloc_nowait-$KMI.ko" ] && KVKO=$MODDIR/kmod/kvmalloc_nowait-$KMI.ko
+    if [ -z "$KVKO" ]; then
+        KV_WHY=kernel
+    elif ! kv_hook; then
+        KV_WHY=hook
+    elif [ -f "$KV_TRIP" ]; then
+        KV_STATE=err
+        KV_WHY=reboot
+    elif [ -f "$RUN/kvmalloc.err" ]; then
+        KV_STATE=err
+        KV_WHY=insmod
+    else
+        KV_STATE=off
+    fi
+}
+
+# The hook is switched on with a note of the boot and the second, and the
+# note goes once the hook has held for KV_HOLD seconds. A note from another
+# boot means the phone went down in between: the switch goes off and stays
+# off until someone switches it on again. Needs the settings loaded.
+kv_guard() {
+    [ -f "$KV_TRY" ] || return 0
+    boot_id
+    uptime_s
+    read -r kt_boot kt_up 2>/dev/null <"$KV_TRY"
+    if [ "$kt_boot" != "$BOOT" ]; then
+        rm -f "$KV_TRY"
+        : >"$KV_TRIP"
+        KV=0
+        save_conf
+        log "kvmalloc: the phone went down right after the hook was switched on; left off"
+        return 0
+    fi
+    is_num "$kt_up" || kt_up=0
+    [ $((UP - kt_up)) -ge "$KV_HOLD" ] && rm -f "$KV_TRY"
+    return 0
+}
+
+kv_on() {
+    rm -f "$KV_TRIP"
+    if [ -d "$KVPARAM" ]; then
+        echo 1 >"$KVPARAM/enabled" 2>/dev/null
+        return 0
+    fi
+    kv_state
+    [ "$KV_STATE" = na ] && return 1
+    boot_id
+    uptime_s
+    echo "$BOOT $UP" >"$KV_TRY"
+    sync
+    if out=$(insmod "$KVKO" 2>&1); then
+        rm -f "$RUN/kvmalloc.err"
+        log "kvmalloc: on"
+        if [ "$KV_HOLD" = 0 ]; then rm -f "$KV_TRY"; else detach kvheld; fi
+        return 0
+    fi
+    rm -f "$KV_TRY"
+    : >"$RUN/kvmalloc.err"
+    log "kvmalloc: insmod failed: $out"
+    return 1
+}
+
+kv_off() {
+    rm -f "$RUN/kvmalloc.err" "$KV_TRIP" "$KV_TRY"
+    [ -d "$SYSMOD/kvmalloc_nowait" ] || return 0
+    first "$KVPARAM/sent"
+    rmmod kvmalloc_nowait 2>/dev/null || echo 0 >"$KVPARAM/enabled" 2>/dev/null
+    log "kvmalloc: off, ${VAL:-0} requests went to vmalloc"
 }
 
 # ------------------------------------------------------------- reserve
@@ -670,11 +815,7 @@ boot_reclaim() {
 # over from one that is already running.
 watch_start() {
     floors_begin
-    if command -v setsid >/dev/null 2>&1; then
-        setsid sh "$0" watch keep </dev/null >/dev/null 2>&1 &
-    else
-        nohup sh "$0" watch keep </dev/null >/dev/null 2>&1 &
-    fi
+    detach watch keep
 }
 
 any_mark() {
@@ -891,7 +1032,9 @@ takeover() {
 # before this.
 apply() {
     load_conf
+    kv_guard
     if [ "$GPU" = 1 ]; then gpu_on; fi
+    if [ "$KV" = 1 ]; then kv_on; fi
     if [ "$RESERVE" = 1 ]; then reserve_on; fi
     [ "$1" = boot ] && return 0
     official_check
@@ -912,7 +1055,9 @@ apply() {
 
 status() {
     load_conf
+    kv_guard
     gpu_state
+    kv_state
     reserve_state
     official_known
     KEEP_WHY=
@@ -920,7 +1065,7 @@ status() {
     [ "$OFFICIAL" = 1 ] && KEEP_WHY=official
     paused=0
     [ -f "$PAUSE" ] && paused=1
-    echo "api=3"
+    echo "api=4"
     echo "version=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)"
     echo "build=$(sed -n 's/^versionCode=//p' "$MODDIR/module.prop" 2>/dev/null)"
     echo "paused=$paused"
@@ -929,6 +1074,11 @@ status() {
     echo "gpu_why=$GPU_WHY"
     echo "gpu_was=$GPU_WAS"
     echo "gpu_series=$KMI"
+    echo "kvmalloc=$KV"
+    echo "kvmalloc_state=$KV_STATE"
+    echo "kvmalloc_why=$KV_WHY"
+    echo "kvmalloc_seen=$KV_SEEN"
+    echo "kvmalloc_sent=$KV_SENT"
     echo "reserve=$RESERVE"
     echo "reserve_state=$RES_STATE"
     echo "reserve_now=$RES_NOW"
@@ -955,9 +1105,11 @@ case $1 in
 status) status ;;
 set)
     load_conf
+    kv_guard
     case $3 in 0 | 1) ;; *) echo "error=value" && exit 1 ;; esac
     case $2 in
     gpu) GPU=$3 && fn=gpu ;;
+    kvmalloc) KV=$3 && fn=kv ;;
     reserve) RESERVE=$3 && fn=reserve ;;
     ui | home | sf | composer | alloc | server) eval "K_$2=\$3" && fn="keep" ;;
     *) echo "error=name" && exit 1 ;;
@@ -979,6 +1131,11 @@ resume)
     ;;
 watch) watch "$2" ;;
 takeover) takeover ;;
+kvheld)
+    # the hook has held: the note of its start can go
+    sleep "$KV_HOLD" 2>/dev/null
+    rm -f "$KV_TRY"
+    ;;
 guard)
     # A start that never reached "settled" (the phone went down while the
     # fixes were being applied) pauses the module instead of trying again.
@@ -995,7 +1152,7 @@ guard)
 settled) rm -f "$GUARD" ;;
 log) tail -n "${2:-50}" "$LOG" 2>/dev/null ;;
 *)
-    echo "usage: dejank.sh status | set <gpu|reserve|ui|home|sf|composer|alloc|server> <0|1> | apply | resume | log [lines]"
+    echo "usage: dejank.sh status | set <gpu|kvmalloc|reserve|ui|home|sf|composer|alloc|server> <0|1> | apply | resume | log [lines]"
     exit 1
     ;;
 esac

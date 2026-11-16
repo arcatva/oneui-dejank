@@ -8,8 +8,10 @@ T=$(mktemp -d /tmp/dejank.XXXXXX)
 trap 'rm -rf "$T"' EXIT
 
 export DATA=$T/data RUN=$T/run PROC=$T/proc VM=$T/vm SYSMOD=$T/sysmod CG=$T/cg
-export RMDIR="rm -rf" KILL=$T/bin/kill9 NAP=0 WATCH_FAST=0 WATCH_ROUNDS=2 WATCH_ONCE=1 BOOT_RECLAIM_AFTER=0 T
+export RMDIR="rm -rf" KILL=$T/bin/kill9 NAP=0 WATCH_FAST=0 WATCH_ROUNDS=2 WATCH_ONCE=1 BOOT_RECLAIM_AFTER=0 KV_HOLD=0 T
 KO=$T/mod/kmod/kgsl_nowait-android16-6.12.ko
+KVKO=$T/mod/kmod/kvmalloc_nowait-android16-6.12.ko
+HOOK="ffffffc008123450 T __traceiter_android_vh_kvmalloc_node_use_vmalloc"
 ADDR=ffffffc07e322f20
 
 # ---------------------------------------------------------- the phone
@@ -19,16 +21,17 @@ phone() {
         sleep 0.5
         rm -rf "$T/mod" "$DATA" "$RUN" "$PROC" "$VM" "$SYSMOD" "$CG" "$T/bin" "$T/pids" "$T/calls"
     }
-    rm -f "$T/dumpsys.out"
+    rm -f "$T/dumpsys.out" "$T/insmod.fail"
     mkdir -p "$T/mod/kmod" "$PROC/sys/kernel/random" "$VM" "$SYSMOD/msm_kgsl" "$CG/apps/uid_10056/pid_100" "$T/bin" "$T/pids"
     cp "$SRC"/*.sh "$SRC"/module.prop "$T/mod/"
     : >"$KO"
+    : >"$KVKO"
     : >"$T/calls"
     echo "6.12.58-android16-6-abc-4k" >"$T/uname"
     echo 2 >"$T/kgsl.value"
     echo "11111111-aaaa" >"$PROC/sys/kernel/random/boot_id"
     echo 2 >"$PROC/sys/kernel/kptr_restrict"
-    printf '%s\n' "ffffffc000000010 T schedule" \
+    printf '%s\n' "ffffffc000000010 T schedule" "$HOOK" \
         "ffffffc07e300000 b kgsl_pool_retry_min_order_x	[other]" \
         "$ADDR b kgsl_pool_retry_min_order	[msm_kgsl]" >"$PROC/kallsyms"
     echo "1000.50 900.00" >"$PROC/uptime"
@@ -49,6 +52,18 @@ EOF
 #!/bin/sh
 echo "insmod $*" >>"$T/calls"
 [ -f "$T/insmod.fail" ] && echo "insmod: failed to load: Exec format error" >&2 && exit 1
+case $1 in
+*/kvmalloc_nowait-*)
+    # what the script noted before it let the hook in
+    [ -f "$DATA/kvmalloc.trying" ] && echo "noted $(cat "$DATA/kvmalloc.trying")" >>"$T/calls"
+    p=$SYSMOD/kvmalloc_nowait/parameters
+    /bin/mkdir -p "$p"
+    echo 1 >"$p/enabled"
+    echo 12 >"$p/seen"
+    echo 9 >"$p/sent"
+    exit 0
+    ;;
+esac
 p=$SYSMOD/kgsl_nowait/parameters
 /bin/mkdir -p "$p"
 cat "$T/kgsl.value" >"$p/saved"
@@ -58,7 +73,7 @@ EOF
     cat >"$T/bin/rmmod" <<'EOF'
 #!/bin/sh
 echo "rmmod $*" >>"$T/calls"
-rm -rf "$SYSMOD/kgsl_nowait"
+rm -rf "$SYSMOD/$1"
 EOF
     cat >"$T/bin/pidof" <<'EOF'
 #!/bin/sh
@@ -168,11 +183,13 @@ logged() { if grep -q -- "$2" "$DATA/log" 2>/dev/null; then ok; else bad "$1 -> 
 # ---------------------------------------------------------- a fresh phone
 phone
 S=$(ctl status)
-has "api" "$S" "api=3"
+has "api" "$S" "api=4"
 has "version" "$S" "version=$(sed -n 's/^version=//p' "$SRC/module.prop")"
 has "build" "$S" "build=$(sed -n 's/^versionCode=//p' "$SRC/module.prop")"
 has "everything is wanted by default" "$S" "gpu=1"
 has "reserve wanted" "$S" "reserve=1"
+has "the hook into kvmalloc is not" "$S" "kvmalloc=0"
+has "and is off" "$S" "kvmalloc_state=off"
 has "gpu not applied yet" "$S" "gpu_state=off"
 has "reserve not applied yet" "$S" "reserve_state=off"
 has "reserve shows the phone's value" "$S" "reserve_now=73"
@@ -246,6 +263,125 @@ logged "the kernel's reason is logged" "insmod failed: insmod: failed to load: E
 rm -f "$T/insmod.fail"
 expect "a later try works" "$(ctl set gpu 1)" "ok=1"
 has "and clears the error" "$(ctl status)" "gpu_state=on"
+
+# ---------------------------------------------------------- kvmalloc
+phone
+expect "kvmalloc on" "$(ctl set kvmalloc 1)" "ok=1"
+called "the module for this kernel" "insmod $KVKO"
+called "the boot and the second are noted before the hook goes in" "noted 11111111-aaaa 1000"
+[ ! -e "$DATA/kvmalloc.trying" ] && ok || bad "the note stays although the hook held"
+S=$(ctl status)
+has "kvmalloc is on" "$S" "kvmalloc_state=on"
+has "wanted" "$S" "kvmalloc=1"
+has "requests above the limit" "$S" "kvmalloc_seen=12"
+has "requests sent to vmalloc" "$S" "kvmalloc_sent=9"
+has "the gpu switch is another one" "$S" "gpu_state=off"
+logged "kvmalloc on is logged" "kvmalloc: on"
+expect "the switch is saved" "$(grep '^KVMALLOC=' "$DATA/conf")" "KVMALLOC=1"
+expect "kvmalloc off" "$(ctl set kvmalloc 0)" "ok=1"
+called "the module is unloaded" "rmmod kvmalloc_nowait"
+S=$(ctl status)
+has "kvmalloc is off" "$S" "kvmalloc_state=off"
+has "off is remembered" "$S" "kvmalloc=0"
+has "no numbers without the module" "$S" "kvmalloc_sent="
+logged "what it did is logged" "kvmalloc: off, 9 requests went to vmalloc"
+
+phone
+ctl set gpu 1 >/dev/null
+ctl set kvmalloc 1 >/dev/null
+ctl set gpu 0 >/dev/null
+S=$(ctl status)
+has "switching the gpu fix off leaves the hook" "$S" "kvmalloc_state=on"
+has "and takes its own module out" "$S" "gpu_state=off"
+
+phone
+echo "6.18.3-android17-2-abc-4k" >"$T/uname"
+: >"$T/mod/kmod/kvmalloc_nowait-android17-6.18.ko"
+S=$(ctl status)
+has "Linux 6.16 and later do not wait" "$S" "kvmalloc_state=na"
+has "says why" "$S" "kvmalloc_why=builtin"
+expect "nothing to switch on there" "$(ctl set kvmalloc 1)" "error=failed"
+not_called "nothing is loaded" "insmod"
+
+phone
+echo "6.6.30-android15-8-xyz" >"$T/uname"
+S=$(ctl status)
+has "no build for another kernel series" "$S" "kvmalloc_state=na"
+has "says why" "$S" "kvmalloc_why=kernel"
+expect "cannot be switched on there" "$(ctl set kvmalloc 1)" "error=failed"
+
+phone
+printf '%s\n' "ffffffc000000010 T schedule" "${HOOK}_x" >"$PROC/kallsyms"
+S=$(ctl status)
+has "a kernel without Android's hook" "$S" "kvmalloc_state=na"
+has "says why" "$S" "kvmalloc_why=hook"
+expect "cannot be switched on" "$(ctl set kvmalloc 1)" "error=failed"
+not_called "nothing is loaded without the hook" "insmod"
+expect "the symbol list is read once per boot" "$(cat "$RUN/kvmalloc.hook")" "0"
+
+phone
+: >"$T/insmod.fail"
+expect "the kernel refuses the module" "$(ctl set kvmalloc 1)" "error=failed"
+S=$(ctl status)
+has "refusal is an error" "$S" "kvmalloc_state=err"
+has "the error is insmod" "$S" "kvmalloc_why=insmod"
+[ ! -e "$DATA/kvmalloc.trying" ] && ok || bad "a module that never loaded left a note"
+rm -f "$T/insmod.fail"
+expect "a later try works" "$(ctl set kvmalloc 1)" "ok=1"
+has "and clears the error" "$(ctl status)" "kvmalloc_state=on"
+
+# the note of a start: it goes when the hook has held, and trips the switch after a reboot
+phone
+expect "on, with the hook on probation for a second" "$(KV_HOLD=1 ctl set kvmalloc 1)" "ok=1"
+[ -f "$DATA/kvmalloc.trying" ] && ok || bad "no note while the hook is on probation"
+has "a look in that time leaves the note" "$(KV_HOLD=1 ctl status)" "kvmalloc_state=on"
+[ -f "$DATA/kvmalloc.trying" ] && ok || bad "status took the note away early"
+sleep 1.3
+[ ! -e "$DATA/kvmalloc.trying" ] && ok || bad "the note stays after the hook held"
+
+phone
+ctl set kvmalloc 1 >/dev/null
+echo "11111111-aaaa 990" >"$DATA/kvmalloc.trying"
+S=$(KV_HOLD=3 ctl status)
+has "a note nobody took away, same boot" "$S" "kvmalloc_state=on"
+[ ! -e "$DATA/kvmalloc.trying" ] && ok || bad "an old note of this boot stays"
+has "is no reboot" "$S" "kvmalloc=1"
+
+phone
+ctl set kvmalloc 1 >/dev/null
+# the phone went down: another boot, nothing loaded, the note still there
+echo "11111111-aaaa 1000" >"$DATA/kvmalloc.trying"
+echo "22222222-bbbb" >"$PROC/sys/kernel/random/boot_id"
+rm -rf "$SYSMOD/kvmalloc_nowait" "$RUN"
+: >"$T/calls"
+S=$(ctl status)
+has "a note from another boot switches the hook off" "$S" "kvmalloc=0"
+has "as an error" "$S" "kvmalloc_state=err"
+has "that says why" "$S" "kvmalloc_why=reboot"
+[ ! -e "$DATA/kvmalloc.trying" ] && ok || bad "the note of the other boot stays"
+expect "the switch is saved as off" "$(grep '^KVMALLOC=' "$DATA/conf")" "KVMALLOC=0"
+logged "the reboot is logged" "kvmalloc: the phone went down right after the hook was switched on"
+ctl apply >/dev/null
+not_called "apply leaves it off" "insmod $KVKO"
+has "and it stays an error" "$(ctl status)" "kvmalloc_why=reboot"
+expect "switching it on by hand tries again" "$(ctl set kvmalloc 1)" "ok=1"
+S=$(ctl status)
+has "and it is on" "$S" "kvmalloc_state=on"
+has "with no reason left" "$S" "kvmalloc_why="
+
+phone
+mkdir -p "$DATA" && echo "KVMALLOC=1" >"$DATA/conf"
+echo "11111111-aaaa 1000" >"$DATA/kvmalloc.trying"
+echo "22222222-bbbb" >"$PROC/sys/kernel/random/boot_id"
+ctl apply boot >/dev/null
+not_called "a start after such a reboot does not load the hook" "insmod $KVKO"
+called "the gpu fix is applied as ever" "insmod $KO addr=0x$ADDR"
+
+phone
+mkdir -p "$DATA" && echo "KVMALLOC=1" >"$DATA/conf"
+expect "apply at boot" "$(ctl apply boot)" "ok=1"
+called "loads the hook when it is wanted" "insmod $KVKO"
+has "and it is on" "$(ctl status)" "kvmalloc_state=on"
 
 # ---------------------------------------------------------- reserve
 phone
