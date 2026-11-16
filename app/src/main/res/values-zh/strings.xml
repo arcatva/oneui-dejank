@@ -6,7 +6,7 @@
         <item quantity="other">%d 项已生效</item>
     </plurals>
 
-    <string name="tile_gpu">显存分配</string>
+    <string name="tile_alloc">内存分配</string>
     <string name="tile_reserve">内存预留</string>
     <string name="tile_keep">常驻内存</string>
     <string name="on">已开启</string>
@@ -17,20 +17,17 @@
     <string name="failed">启用失败</string>
     <string name="built_in">系统已内置</string>
 
-    <string name="gpu_switch">大页不足时回退小页</string>
-    <string name="gpu_about">避免 GPU 驱动在分配显存时阻塞等待内存回收。</string>
+    <string name="gpu_switch">显存：大页不足时回退小页</string>
+    <string name="alloc_about">避免在分配内存时阻塞等待内存回收。</string>
     <string name="gpu_na_driver">未检测到 Adreno 驱动</string>
     <string name="gpu_na_setting">当前驱动无需此修复</string>
     <string name="gpu_na_kernel">暂未适配当前内核</string>
     <string name="gpu_na_series">暂未适配 %1$s</string>
     <string name="gpu_err">内核拒绝加载模块</string>
 
-    <string name="kvmalloc_switch">连续内存不足时回退 vmalloc</string>
+    <string name="kvmalloc_switch">内核：连续内存不足时回退 vmalloc</string>
     <string name="kvmalloc_na_builtin">当前内核已内置</string>
     <string name="kvmalloc_err_reboot">开启后设备重启，已关闭</string>
-    <plurals name="kvmalloc_changed">
-        <item quantity="other">%,d 次</item>
-    </plurals>
 
     <string name="reserve_switch">提高内存回收水位</string>
     <string name="reserve_about">空闲内存降至约 3% 时即开始后台回收，默认为不足 1%。</string>

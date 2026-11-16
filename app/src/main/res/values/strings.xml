@@ -10,7 +10,7 @@
         <item quantity="other">%d fixes active</item>
     </plurals>
 
-    <string name="tile_gpu">GPU memory</string>
+    <string name="tile_alloc">Memory allocation</string>
     <string name="tile_reserve">Memory reserve</string>
     <string name="tile_keep">Kept in RAM</string>
     <string name="on">On</string>
@@ -21,21 +21,17 @@
     <string name="failed">Failed</string>
     <string name="built_in">Built in</string>
 
-    <string name="gpu_switch">Fall back to smaller pages</string>
-    <string name="gpu_about">Prevents the GPU driver from blocking on memory reclaim during allocation.</string>
+    <string name="gpu_switch">GPU: fall back to smaller pages</string>
+    <string name="alloc_about">Prevents allocations from blocking on memory reclaim.</string>
     <string name="gpu_na_driver">No Adreno driver detected</string>
     <string name="gpu_na_setting">Not needed with this driver</string>
     <string name="gpu_na_kernel">This kernel is not supported yet</string>
     <string name="gpu_na_series">%1$s is not supported yet</string>
     <string name="gpu_err">The kernel rejected the module</string>
 
-    <string name="kvmalloc_switch">Fall back to vmalloc</string>
+    <string name="kvmalloc_switch">Kernel: fall back to vmalloc</string>
     <string name="kvmalloc_na_builtin">Built into this kernel</string>
     <string name="kvmalloc_err_reboot">Turned off: the device restarted after it was enabled</string>
-    <plurals name="kvmalloc_changed">
-        <item quantity="one">%,d request</item>
-        <item quantity="other">%,d requests</item>
-    </plurals>
 
     <string name="reserve_switch">Raise the reclaim watermark</string>
     <string name="reserve_about">Background reclaim starts at about 3% free memory instead of under 1%.</string>

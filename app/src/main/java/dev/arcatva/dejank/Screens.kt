@@ -247,7 +247,7 @@ private fun ColumnScope.Home(
                 .height(IntrinsicSize.Max),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            listOf(Tile.GPU, Tile.RESERVE).forEach { tile ->
+            listOf(Tile.ALLOC, Tile.RESERVE).forEach { tile ->
                 TileCard(
                     tile = tile,
                     status = status,
@@ -390,7 +390,7 @@ private fun ColumnScope.Detail(
     actions: Actions,
 ) {
     when (tile) {
-        Tile.GPU, Tile.RESERVE -> FixDetail(tile, status, busy, actions)
+        Tile.ALLOC, Tile.RESERVE -> FixDetail(tile, status, busy, actions)
         Tile.KEEP -> KeepDetail(status, busy, ask, actions)
     }
 }
@@ -403,8 +403,7 @@ private fun ColumnScope.FixDetail(tile: Tile, status: Status, busy: Boolean, act
             val usable = status.state(fix) != FixState.NA
             SwitchRow(
                 title = stringResource(fix.switch),
-                // what is wrong with it, or else what it has done so far
-                summary = (status.note(fix) ?: status.value(fix))?.text(),
+                summary = status.note(fix)?.text(),
                 summaryColor = status.tone(fix).color(),
                 checked = usable && status.wanted(fix),
                 enabled = usable && !busy,

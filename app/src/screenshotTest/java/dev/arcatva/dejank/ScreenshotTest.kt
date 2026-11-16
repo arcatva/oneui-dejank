@@ -137,7 +137,7 @@ class ScreenshotTest {
 
     @Test
     @Config(qualifiers = "w412dp-h800dp-night-xhdpi")
-    fun gpuDetail() = shoot("gpu_detail", ready(), open = Tile.GPU)
+    fun allocDetail() = shoot("alloc_detail", ready(), open = Tile.ALLOC)
 
     @Test
     @Config(qualifiers = "w412dp-h800dp-night-xhdpi")
@@ -145,7 +145,7 @@ class ScreenshotTest {
 
     @Test
     @Config(qualifiers = "zh-rCN-w412dp-h800dp-night-xhdpi")
-    fun gpuDetailChinese() = shoot("gpu_detail_zh", ready(), open = Tile.GPU)
+    fun allocDetailChinese() = shoot("alloc_detail_zh", ready(), open = Tile.ALLOC)
 
     @Test
     @Config(qualifiers = "zh-rCN-w412dp-h800dp-night-xhdpi")
@@ -157,30 +157,30 @@ class ScreenshotTest {
 
     private val hooked = arrayOf("kvmalloc" to "1", "kvmalloc_state" to "on", "kvmalloc_seen" to "1300", "kvmalloc_changed" to "1234")
 
-    /** Both switches of the tile on: the second one counts what it has done. */
+    /** Both switches of the tile on. */
     @Test
     @Config(qualifiers = "w412dp-h800dp-night-xhdpi")
-    fun gpuDetailBoth() = shoot("gpu_detail_both", ready(*hooked), open = Tile.GPU)
+    fun allocDetailBoth() = shoot("alloc_detail_both", ready(*hooked), open = Tile.ALLOC)
 
     @Test
     @Config(qualifiers = "zh-rCN-w412dp-h800dp-night-xhdpi")
-    fun gpuDetailBothChinese() = shoot("gpu_detail_both_zh", ready(*hooked), open = Tile.GPU)
+    fun allocDetailBothChinese() = shoot("alloc_detail_both_zh", ready(*hooked), open = Tile.ALLOC)
 
     /** The phone restarted right after the second switch: it is off again and says why. */
     @Test
     @Config(qualifiers = "zh-rCN-w412dp-h800dp-night-xhdpi")
-    fun gpuDetailTrippedChinese() =
-        shoot("gpu_detail_tripped_zh", ready("kvmalloc_state" to "err", "kvmalloc_why" to "reboot"), open = Tile.GPU)
+    fun allocDetailTrippedChinese() =
+        shoot("alloc_detail_tripped_zh", ready("kvmalloc_state" to "err", "kvmalloc_why" to "reboot"), open = Tile.ALLOC)
 
     @Test
     @Config(qualifiers = "w340dp-h900dp-night-xhdpi")
-    fun narrowLargeGpu() = shoot("narrow_large_gpu", ready(*hooked), fontScale = 1.3f, open = Tile.GPU)
+    fun narrowLargeAlloc() = shoot("narrow_large_alloc", ready(*hooked), fontScale = 1.3f, open = Tile.ALLOC)
 
     /** The kernel refused the module: the switch says so in one line. */
     @Test
     @Config(qualifiers = "w412dp-h800dp-night-xhdpi")
-    fun gpuDetailRefused() =
-        shoot("gpu_detail_refused", ready("gpu_state" to "err", "gpu_why" to "insmod", "gpu_was" to ""), open = Tile.GPU)
+    fun allocDetailRefused() =
+        shoot("alloc_detail_refused", ready("gpu_state" to "err", "gpu_why" to "insmod", "gpu_was" to ""), open = Tile.ALLOC)
 
     /** An unfolded Fold: the tiles and one tile's details side by side. */
     @Test

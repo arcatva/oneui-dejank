@@ -52,7 +52,7 @@ class ModelTest {
         assertFalse(s.anyPending)
         // on and working: nothing to add to the switch
         Fix.entries.forEach { assertNull(s.note(it)) }
-        assertEquals(lineOf(R.string.on), s.short(Tile.GPU))
+        assertEquals(lineOf(R.string.on), s.short(Tile.ALLOC))
         assertEquals(lineOf(R.string.on), s.short(Tile.RESERVE))
         // the floors of System UI and the home app: 780 MB and 546 MB
         assertEquals(1357824L, s.keptKb)
@@ -84,7 +84,7 @@ class ModelTest {
         // off unless someone switches it on
         assertNull(s.note(Fix.KVMALLOC))
         assertEquals(Tone.IDLE, s.tone(Fix.KVMALLOC))
-        assertEquals(lineOf(R.string.not_applied), s.short(Tile.GPU))
+        assertEquals(lineOf(R.string.not_applied), s.short(Tile.ALLOC))
         assertEquals(lineOf(R.string.not_applied), s.value(Keep.HOME))
         assertEquals(lineOf(R.string.not_applied), s.short(Tile.KEEP))
         assertEquals(Tone.WAITING, s.tone(Tile.KEEP))
@@ -141,10 +141,10 @@ class ModelTest {
     fun `why the GPU fix is not there`() {
         val never = status("gpu_state" to "na", "gpu_why" to "setting")
         assertEquals(lineOf(R.string.gpu_na_setting), never.note(Fix.GPU))
-        assertEquals(lineOf(R.string.not_needed), never.short(Tile.GPU))
+        assertEquals(lineOf(R.string.not_needed), never.short(Tile.ALLOC))
         val other = status("gpu_state" to "na", "gpu_why" to "driver")
         assertEquals(lineOf(R.string.gpu_na_driver), other.note(Fix.GPU))
-        assertEquals(lineOf(R.string.not_supported), other.short(Tile.GPU))
+        assertEquals(lineOf(R.string.not_supported), other.short(Tile.ALLOC))
         assertEquals(
             lineOf(R.string.gpu_na_series, "android15-6.6"),
             status("gpu_state" to "na", "gpu_why" to "kernel", "gpu_series" to "android15-6.6").note(Fix.GPU),
@@ -152,29 +152,25 @@ class ModelTest {
         assertEquals(lineOf(R.string.gpu_na_kernel), status("gpu_state" to "na", "gpu_why" to "kernel").note(Fix.GPU))
         val refused = status("gpu_state" to "err", "gpu_why" to "insmod")
         assertEquals(lineOf(R.string.gpu_err), refused.note(Fix.GPU))
-        assertEquals(lineOf(R.string.failed), refused.short(Tile.GPU))
-        assertEquals(Tone.BAD, refused.tone(Tile.GPU))
+        assertEquals(lineOf(R.string.failed), refused.short(Tile.ALLOC))
+        assertEquals(Tone.BAD, refused.tone(Tile.ALLOC))
         assertEquals(2, refused.working)
     }
 
     @Test
-    fun `the hook into kvmalloc is a second switch of the GPU tile`() {
-        assertEquals(listOf(Fix.GPU, Fix.KVMALLOC), Tile.GPU.fixes)
+    fun `the hook into kvmalloc is a second switch of the allocation tile`() {
+        assertEquals(listOf(Fix.GPU, Fix.KVMALLOC), Tile.ALLOC.fixes)
         val on = status("kvmalloc" to "1", "kvmalloc_state" to "on", "kvmalloc_seen" to "1300", "kvmalloc_changed" to "1234")
         assertNull(on.note(Fix.KVMALLOC))
         assertEquals(Tone.GOOD, on.tone(Fix.KVMALLOC))
-        assertEquals(countOf(R.plurals.kvmalloc_changed, 1234), on.value(Fix.KVMALLOC))
-        assertNull(on.value(Fix.GPU))
         // a tile is one of three however many of its switches are on
         assertEquals(3, on.working)
         val alone = status("gpu" to "0", "gpu_state" to "off", "kvmalloc" to "1", "kvmalloc_state" to "on")
-        assertEquals(lineOf(R.string.on), alone.short(Tile.GPU))
-        assertEquals(Tone.GOOD, alone.tone(Tile.GPU))
-        assertNull(alone.value(Fix.KVMALLOC))
+        assertEquals(lineOf(R.string.on), alone.short(Tile.ALLOC))
+        assertEquals(Tone.GOOD, alone.tone(Tile.ALLOC))
         val wanted = status("kvmalloc" to "1")
         assertEquals(lineOf(R.string.not_applied), wanted.note(Fix.KVMALLOC))
         assertTrue(wanted.anyPending)
-        assertNull(wanted.value(Fix.KVMALLOC))
     }
 
     @Test
@@ -186,16 +182,16 @@ class ModelTest {
         val bare = status("kvmalloc_state" to "na", "kvmalloc_why" to "hook")
         assertEquals(lineOf(R.string.reserve_na), bare.note(Fix.KVMALLOC))
         // none of this is the tile's business while its first fix works
-        assertEquals(lineOf(R.string.on), bare.short(Tile.GPU))
+        assertEquals(lineOf(R.string.on), bare.short(Tile.ALLOC))
         val refused = status("kvmalloc" to "1", "kvmalloc_state" to "err", "kvmalloc_why" to "insmod")
         assertEquals(lineOf(R.string.gpu_err), refused.note(Fix.KVMALLOC))
-        assertEquals(lineOf(R.string.failed), refused.short(Tile.GPU))
-        assertEquals(Tone.BAD, refused.tone(Tile.GPU))
+        assertEquals(lineOf(R.string.failed), refused.short(Tile.ALLOC))
+        assertEquals(Tone.BAD, refused.tone(Tile.ALLOC))
         // the phone went down after the switch: it is off again and says why, the tile carries on
         val tripped = status("kvmalloc" to "0", "kvmalloc_state" to "err", "kvmalloc_why" to "reboot")
         assertEquals(lineOf(R.string.kvmalloc_err_reboot), tripped.note(Fix.KVMALLOC))
         assertEquals(Tone.BAD, tripped.tone(Fix.KVMALLOC))
-        assertEquals(lineOf(R.string.on), tripped.short(Tile.GPU))
+        assertEquals(lineOf(R.string.on), tripped.short(Tile.ALLOC))
         assertFalse(tripped.anyPending)
     }
 
@@ -210,7 +206,7 @@ class ModelTest {
     fun `switched off is off, not pending`() {
         val s = status("gpu" to "0", "gpu_state" to "off", "gpu_was" to "")
         assertNull(s.note(Fix.GPU))
-        assertEquals(lineOf(R.string.off), s.short(Tile.GPU))
+        assertEquals(lineOf(R.string.off), s.short(Tile.ALLOC))
         assertEquals(Tone.IDLE, s.tone(Fix.GPU))
         assertFalse(s.anyPending)
         assertEquals(2, s.working)

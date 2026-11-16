@@ -110,7 +110,7 @@ data class Kept(
 
 /** The tiles of the first screen. A tile of [fixes] has a switch for each and one sentence [about] them. */
 enum class Tile(val title: Int, val icon: Int, val fixes: List<Fix> = emptyList(), val about: Int = 0) {
-    GPU(R.string.tile_gpu, R.drawable.ic_gpu, listOf(Fix.GPU, Fix.KVMALLOC), R.string.gpu_about),
+    ALLOC(R.string.tile_alloc, R.drawable.ic_gpu, listOf(Fix.GPU, Fix.KVMALLOC), R.string.alloc_about),
     RESERVE(R.string.tile_reserve, R.drawable.ic_reserve, listOf(Fix.RESERVE), R.string.reserve_about),
     KEEP(R.string.tile_keep, R.drawable.ic_keep),
 }
@@ -129,8 +129,6 @@ data class Status(
     val gpuSeries: String = "",
     /** Why the hook into kvmalloc is not on: "builtin", "kernel", "hook", "insmod", "reboot", or empty. */
     val kvmallocWhy: String = "",
-    /** Requests whose first attempt the hook has kept from waiting since it was loaded. */
-    val kvmallocChanged: Long? = null,
     /** Why nothing can be kept in RAM here: "official" (Android does it itself), "controller", or empty. */
     val keepWhy: String = "",
     val memTotalKb: Long? = null,
@@ -213,11 +211,6 @@ data class Status(
     private fun noBuild(): Line =
         if (gpuSeries.isEmpty()) lineOf(R.string.gpu_na_kernel) else lineOf(R.string.gpu_na_series, gpuSeries)
 
-    /** Under a fix's switch while it is on: what it has done so far. Null when there is nothing to count. */
-    fun value(fix: Fix): Line? {
-        if (fix != Fix.KVMALLOC || state(fix) != FixState.ON) return null
-        return kvmallocChanged?.let { countOf(R.plurals.kvmalloc_changed, it.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()) }
-    }
 
     /** Next to a process's switch: how much of it is kept, or what it waits for. Null when there is nothing to say. */
     fun value(keep: Keep): Line? {
@@ -245,7 +238,7 @@ data class Status(
 
     /** What a tile says under its name: a word, or for what is kept, how many and how much. */
     fun short(tile: Tile): Line = when (tile) {
-        Tile.GPU, Tile.RESERVE -> when {
+        Tile.ALLOC, Tile.RESERVE -> when {
             failed(tile) -> lineOf(R.string.failed)
             on(tile) -> lineOf(R.string.on)
             else -> short(tile.fixes.first())
@@ -260,7 +253,7 @@ data class Status(
     }
 
     fun tone(tile: Tile): Tone = when (tile) {
-        Tile.GPU, Tile.RESERVE -> when {
+        Tile.ALLOC, Tile.RESERVE -> when {
             failed(tile) -> Tone.BAD
             on(tile) -> Tone.GOOD
             else -> tone(tile.fixes.first())
@@ -298,7 +291,6 @@ fun parseStatus(text: String): Status? {
         gpuWhy = map["gpu_why"].orEmpty(),
         gpuSeries = map["gpu_series"].orEmpty(),
         kvmallocWhy = map["kvmalloc_why"].orEmpty(),
-        kvmallocChanged = map["kvmalloc_changed"]?.toLongOrNull(),
         keepWhy = map["keep_why"].orEmpty(),
         memTotalKb = map["mem_total_kb"]?.toLongOrNull(),
         kept = Keep.entries.associateWith { keep ->
