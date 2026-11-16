@@ -41,7 +41,8 @@
         <item quantity="one">%1$d process, %2$s</item>
         <item quantity="other">%1$d processes, %2$s</item>
     </plurals>
-    <string name="keep_of">of %1$s</string>
+    <string name="keep_floor">Floor</string>
+    <string name="keep_of">/ limit %1$s</string>
     <string name="keep_about">Each enabled process gets a memory floor. Memory under the floor is not reclaimed.</string>
     <string name="keep_na_official">Built into this version of Android</string>
     <string name="keep_na_controller">Not supported by this kernel</string>
@@ -51,12 +52,6 @@
     <string name="keep_ui_role">Status bar and notification panel</string>
     <string name="keep_home">Home app</string>
     <string name="keep_home_role">Home screen and recents</string>
-    <string name="keep_sf" translatable="false">SurfaceFlinger</string>
-    <string name="keep_sf_role">Layer composition</string>
-    <string name="keep_composer">Display composer</string>
-    <string name="keep_composer_role">Display output</string>
-    <string name="keep_alloc">Graphics allocator</string>
-    <string name="keep_alloc_role">Frame buffer allocation</string>
     <string name="keep_server" translatable="false">system_server</string>
     <string name="keep_server_role">Window management and input</string>
     <string name="kept_wait">Waiting</string>

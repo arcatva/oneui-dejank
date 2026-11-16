@@ -63,9 +63,6 @@ enum class Fix(val key: String, val switch: Int) {
 enum class Keep(val key: String, val restarts: Boolean, val title: Int, val role: Int) {
     UI("ui", true, R.string.keep_ui, R.string.keep_ui_role),
     HOME("home", true, R.string.keep_home, R.string.keep_home_role),
-    SF("sf", false, R.string.keep_sf, R.string.keep_sf_role),
-    COMPOSER("composer", false, R.string.keep_composer, R.string.keep_composer_role),
-    ALLOC("alloc", false, R.string.keep_alloc, R.string.keep_alloc_role),
     SERVER("server", false, R.string.keep_server, R.string.keep_server_role),
 }
 
@@ -131,7 +128,8 @@ data class Status(
     val kvmallocWhy: String = "",
     /** Why nothing can be kept in RAM here: "official" (Android does it itself), "controller", or empty. */
     val keepWhy: String = "",
-    val memTotalKb: Long? = null,
+    /** The most all floors may come to together. */
+    val keepCapKb: Long? = null,
     val kept: Map<Keep, Kept> = emptyMap(),
 ) {
     fun wanted(fix: Fix): Boolean = wanted[fix] == true
@@ -291,7 +289,7 @@ fun parseStatus(text: String): Status? {
         gpuSeries = map["gpu_series"].orEmpty(),
         kvmallocWhy = map["kvmalloc_why"].orEmpty(),
         keepWhy = map["keep_why"].orEmpty(),
-        memTotalKb = map["mem_total_kb"]?.toLongOrNull(),
+        keepCapKb = map["keep_cap_kb"]?.toLongOrNull(),
         kept = Keep.entries.associateWith { keep ->
             Kept(
                 wanted = map[keep.key] == "1",

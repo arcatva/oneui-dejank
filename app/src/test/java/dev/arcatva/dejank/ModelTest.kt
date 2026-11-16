@@ -13,12 +13,9 @@ class ModelTest {
             "gpu" to "1", "gpu_state" to "on", "gpu_why" to "", "gpu_was" to "2",
             "kvmalloc" to "0", "kvmalloc_state" to "off", "kvmalloc_why" to "", "kvmalloc_seen" to "", "kvmalloc_changed" to "",
             "reserve" to "1", "reserve_state" to "on", "reserve_now" to "300", "reserve_stock" to "73",
-            "keep_why" to "", "mem_total_kb" to "11351040",
+            "keep_why" to "", "mem_total_kb" to "11351040", "keep_cap_kb" to "1135100",
             "ui" to "1", "ui_state" to "on", "ui_kb" to "861184", "ui_min_kb" to "798720",
             "home" to "1", "home_state" to "on", "home_kb" to "824320", "home_min_kb" to "559104",
-            "sf" to "0", "sf_state" to "off", "sf_kb" to "", "sf_min_kb" to "",
-            "composer" to "0", "composer_state" to "off", "composer_kb" to "", "composer_min_kb" to "",
-            "alloc" to "0", "alloc_state" to "off", "alloc_kb" to "", "alloc_min_kb" to "",
             "server" to "0", "server_state" to "off", "server_kb" to "", "server_min_kb" to "",
         )
         change.forEach { (k, v) -> map[k] = v }
@@ -89,8 +86,8 @@ class ModelTest {
         assertEquals(lineOf(R.string.not_applied), s.short(Tile.KEEP))
         assertEquals(Tone.WAITING, s.tone(Tile.KEEP))
         // what is switched off is not waiting for anything
-        assertFalse(s.pending(Keep.SF))
-        assertNull(s.value(Keep.SF))
+        assertFalse(s.pending(Keep.SERVER))
+        assertNull(s.value(Keep.SERVER))
     }
 
     @Test
@@ -113,17 +110,16 @@ class ModelTest {
 
     @Test
     fun `a phone without one of the processes`() {
-        val s = status("composer_state" to "none")
-        assertEquals(lineOf(R.string.kept_none), s.value(Keep.COMPOSER))
-        assertFalse(s.pending(Keep.COMPOSER))
+        val s = status("server_state" to "none")
+        assertEquals(lineOf(R.string.kept_none), s.value(Keep.SERVER))
+        assertFalse(s.pending(Keep.SERVER))
     }
 
     @Test
     fun `Android that keeps them in RAM itself`() {
         val s = status(
             "keep_why" to "official",
-            "ui_state" to "na", "home_state" to "na", "sf_state" to "na",
-            "composer_state" to "na", "alloc_state" to "na", "server_state" to "na",
+            "ui_state" to "na", "home_state" to "na", "server_state" to "na",
             "ui_kb" to "", "ui_min_kb" to "", "home_kb" to "", "home_min_kb" to "",
         )
         assertEquals(lineOf(R.string.built_in), s.short(Tile.KEEP))

@@ -358,9 +358,9 @@ internal fun TileCard(
 /** How much of the phone's RAM is kept, to scale. */
 @Composable
 internal fun KeptBar(status: Status, modifier: Modifier = Modifier) {
-    val total = status.memTotalKb ?: return
-    if (total <= 0) return
-    val part = (status.keptKb.toFloat() / total).coerceIn(0f, 1f)
+    val cap = status.keepCapKb ?: return
+    if (cap <= 0) return
+    val part = (status.keptKb.toFloat() / cap).coerceIn(0f, 1f)
     Box(
         modifier
             .fillMaxWidth()
@@ -421,7 +421,7 @@ private fun ColumnScope.KeepDetail(status: Status, busy: Boolean, ask: (() -> Un
     if (status.keepWhy.isNotEmpty()) {
         Hint(status.keepReason().text(), Modifier.padding(horizontal = 8.dp))
     } else {
-        val total = status.memTotalKb
+        val cap = status.keepCapKb
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = segment(0, 1),
@@ -429,14 +429,16 @@ private fun ColumnScope.KeepDetail(status: Status, busy: Boolean, ask: (() -> Un
         ) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row {
+                    Hint(stringResource(R.string.keep_floor), Modifier.alignByBaseline())
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         size(status.keptKb),
                         Modifier.alignByBaseline(),
                         style = MaterialTheme.typography.headlineSmall,
                     )
-                    if (total != null && total > 0) {
+                    if (cap != null && cap > 0) {
                         Spacer(Modifier.width(8.dp))
-                        Hint(stringResource(R.string.keep_of, size(total)), Modifier.alignByBaseline())
+                        Hint(stringResource(R.string.keep_of, size(cap)), Modifier.alignByBaseline())
                     }
                 }
                 KeptBar(status)

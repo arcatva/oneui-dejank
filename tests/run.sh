@@ -8,7 +8,7 @@ T=$(mktemp -d /tmp/dejank.XXXXXX)
 trap 'rm -rf "$T"' EXIT
 
 export DATA=$T/data RUN=$T/run PROC=$T/proc VM=$T/vm SYSMOD=$T/sysmod CG=$T/cg
-export RMDIR="rm -rf" KILL=$T/bin/kill9 NAP=0 WATCH_FAST=0 WATCH_ROUNDS=2 WATCH_ONCE=1 BOOT_RECLAIM_AFTER=0 KV_HOLD=0 FREE= REVIVE=0 T
+export RMDIR="rm -rf" KILL=$T/bin/kill9 NAP=0 WATCH_FAST=0 WATCH_ROUNDS=2 WATCH_ONCE=1 BOOT_RECLAIM_AFTER=0 KV_HOLD=0 FREE= BACK= REVIVE=0 T
 KO=$T/mod/kmod/kgsl_nowait-android16-6.12.ko
 KVKO=$T/mod/kmod/kvmalloc_nowait-android16-6.12.ko
 HOOK="ffffffc008123450 T __traceiter_android_vh_adjust_kvmalloc_flags"
@@ -273,8 +273,12 @@ phone
 ctl set ui 1 >/dev/null
 sleep 0.3
 mkdir -p "$T/free" && : >"$T/free/cgroup.procs"
-FREE="$T/free $T/nowhere" ctl watch keep
+mkdir -p "$T/back/cpuset/system-background" "$T/back/blkio" && : >"$T/back/cpuset/cgroup.procs"
+: >"$T/back/cpuset/system-background/cgroup.procs" && : >"$T/back/blkio/cgroup.procs"
+FREE="$T/free $T/nowhere" BACK="$T/back/cpuset $T/back/blkio $T/nowhere" ctl watch keep
 [ -s "$T/free/cgroup.procs" ] && ok || bad "the watcher stayed where it was started"
+[ -s "$T/back/cpuset/system-background/cgroup.procs" ] && [ ! -s "$T/back/cpuset/cgroup.procs" ] && ok || bad "the watcher kept the CPU share of the app on the screen"
+[ -s "$T/back/blkio/cgroup.procs" ] && ok || bad "without a background group, the top of the hierarchy is the place"
 logged "its start is logged" "watcher: started"
 has "without a look-out, a watcher that has ended is only reported" "$(ctl status)" "watcher=0"
 
@@ -508,14 +512,13 @@ phone
 S=$(ctl status)
 has "System UI is wanted by default" "$S" "ui=1"
 has "the home app too" "$S" "home=1"
-has "nothing else is" "$S" "sf=0"
-has "composer off" "$S" "composer=0"
-has "allocator off" "$S" "alloc=0"
-has "system_server off" "$S" "server=0"
+has "system_server is not" "$S" "server=0"
 has "nothing applied yet" "$S" "ui_state=off"
 has "RAM of the phone" "$S" "mem_total_kb=11351040"
+has "a tenth of it is the most all floors come to" "$S" "keep_cap_kb=1135100"
 has "the home app is named" "$S" "home_app=com.sec.android.app.launcher"
-has "a system process that is not there cannot be kept" "$S" "composer_state=none"
+has "a system process that is not there cannot be kept" "$S" "server_state=none"
+if printf '%s\n' "$S" | grep -q '^sf\|^composer\|^alloc'; then bad "a switch that is gone is still reported"; else ok; fi
 
 phone
 app com.android.systemui 100 5000
@@ -659,29 +662,19 @@ native() {
 phone
 native system_server 50
 native surfaceflinger 60
-native vendor.qti.hardware.display.composer-service 70
-native vendor.qti.hardware.display.allocator-service 80
 native android.hardware.audio.service 90
 app com.android.systemui 100 5000
 S=$(ctl status)
 has "found: system_server" "$S" "server_state=off"
-has "found: the composer" "$S" "composer_state=off"
-has "found: the allocator" "$S" "alloc_state=off"
-for k in server sf composer alloc; do
-    expect "$k on" "$(ctl set $k 1)" "ok=1"
-done
+expect "system_server on" "$(ctl set server 1)" "ok=1"
 expect "system_server is in its group" "$(cat "$CG/dejank-server/cgroup.procs")" "50"
-expect "SurfaceFlinger in its own" "$(cat "$CG/dejank-sf/cgroup.procs")" "60"
-expect "the composer service is picked by its name" "$(cat "$CG/dejank-composer/cgroup.procs")" "70"
-expect "the allocator service too" "$(cat "$CG/dejank-alloc/cgroup.procs")" "80"
-expect "where each came from is noted" "$(cat "$RUN/origin.70")" "/system/uid_1000/pid_70"
-not_called "nothing is ever restarted for them" "kill"
+expect "where it came from is noted" "$(cat "$RUN/origin.50")" "/system/uid_1000/pid_50"
+not_called "nothing is ever restarted for it" "kill"
 [ ! -d "$CG/dejank-ui" ] && ok || bad "a system switch applied System UI as well"
 S=$(ctl status)
 has "system_server is on" "$S" "server_state=on"
-has "the composer is on" "$S" "composer_state=on"
 has "System UI is still not applied" "$S" "ui_state=off"
-expect "saved" "$(grep '^KEEP_COMPOSER=' "$DATA/conf")" "KEEP_COMPOSER=1"
+expect "saved" "$(grep '^KEEP_SERVER=' "$DATA/conf")" "KEEP_SERVER=1"
 
 # a system_server that came back is brought in by the watcher
 native system_server 55
@@ -704,21 +697,41 @@ expect "only once in a boot" "$(cat "$CG/dejank-server/memory.reclaim")" "gone"
 
 expect "system_server off" "$(ctl set server 0)" "ok=1"
 expect "back where it came from" "$(cat "$CG/system/uid_1000/pid_55/cgroup.procs")" "55"
-has "the others stay" "$(ctl status)" "sf_state=on"
 
-# another chip: other names for the two vendor services
+# no such process
 phone
-native android.hardware.graphics.composer@2.4-service 70
-native android.hardware.graphics.allocator-V2-service 80
-expect "composer by another name" "$(ctl set composer 1)" "ok=1"
-expect "allocator by another name" "$(ctl set alloc 1)" "ok=1"
-expect "the right one each" "$(cat "$CG/dejank-composer/cgroup.procs")$(cat "$CG/dejank-alloc/cgroup.procs")" "7080"
-
-# a phone without such a process
-phone
-expect "nothing to keep" "$(ctl set composer 1)" "error=failed"
-[ ! -d "$CG/dejank-composer" ] && ok || bad "a group was left behind for a process that is not there"
+expect "nothing to keep" "$(ctl set server 1)" "error=failed"
+[ ! -d "$CG/dejank-server" ] && ok || bad "a group was left behind for a process that is not there"
 expect "the controller is not left on" "$(cat "$CG/cgroup.subtree_control")" "-memory"
+
+# switches of versions before this one: SurfaceFlinger and the two display
+# services were moved as they were and brought next to nothing with them
+phone
+native surfaceflinger 60
+native vendor.qti.hardware.display.composer-service 70
+app com.android.systemui 100 5000
+ctl set ui 1 >/dev/null
+sleep 0.3
+for old in sf composer; do
+    mkdir -p "$CG/dejank-$old" && echo 1024K >"$CG/dejank-$old/memory.min"
+    : >"$RUN/watch.$old" && echo 900 >"$RUN/raw.$old"
+done
+echo 60 >"$CG/dejank-sf/cgroup.procs" && echo "/system/uid_1000/pid_60" >"$RUN/origin.60"
+echo 70 >"$CG/dejank-composer/cgroup.procs" && echo "/system/uid_1000/pid_70" >"$RUN/origin.70"
+: >"$CG/system/uid_1000/pid_60/cgroup.procs"
+: >"$CG/system/uid_1000/pid_70/cgroup.procs"
+echo "KEEP_SF=1" >>"$DATA/conf"
+ctl takeover
+sleep 0.3
+[ ! -d "$CG/dejank-sf" ] && [ ! -d "$CG/dejank-composer" ] && ok || bad "an update left the groups of switches that are gone"
+expect "SurfaceFlinger is back where it came from" "$(cat "$CG/system/uid_1000/pid_60/cgroup.procs")" "60"
+expect "the composer service too" "$(cat "$CG/system/uid_1000/pid_70/cgroup.procs")" "70"
+[ ! -e "$RUN/watch.sf" ] && [ ! -e "$RUN/raw.composer" ] && ok || bad "their marks stay"
+[ -d "$CG/dejank-ui" ] && ok || bad "taking them down took System UI's group as well"
+expect "the controller stays on for what is still kept" "$(cat "$CG/cgroup.subtree_control")" "+memory"
+expect "their names are no switches any more" "$(ctl set sf 1)" "error=name"
+ctl set ui 1 >/dev/null
+if grep -q 'KEEP_SF\|KEEP_COMPOSER\|KEEP_ALLOC' "$DATA/conf"; then bad "a switch that is gone is saved again"; else ok; fi
 
 # Android 17 does this itself where SystemMemoryBudgetManager is at work
 phone
@@ -833,18 +846,18 @@ has "what is kept in RAM is left to the watcher" "$S" "ui_state=off"
 expect "apply now" "$(ctl apply)" "ok=1"
 S=$(ctl status)
 has "System UI is applied" "$S" "ui_state=on"
-has "what is off stays off" "$S" "sf_state=none"
+has "what is off stays off" "$S" "server_state=none"
 
 # ---------------------------------------------------------- settings file
 phone
 mkdir -p "$DATA"
-printf '%s\n' 'GPU=0' 'RESERVE=2' 'KEEP_UI=$(touch "$T/executed")' 'junk' 'EVIL=1; touch "$T/executed"' 'KEEP_SF=1' >"$DATA/conf"
+printf '%s\n' 'GPU=0' 'RESERVE=2' 'KEEP_UI=$(touch "$T/executed")' 'junk' 'EVIL=1; touch "$T/executed"' 'KEEP_SERVER=1' 'KEEP_SF=1' >"$DATA/conf"
 S=$(ctl status)
 has "a saved 0 is read" "$S" "gpu=0"
 has "anything but 0 or 1 is ignored" "$S" "reserve=1"
 has "a value that is a command is ignored" "$S" "ui=1"
-has "a saved 1 is read" "$S" "sf=1"
-has "a missing key keeps its default" "$S" "server=0"
+has "a saved 1 is read" "$S" "server=1"
+has "a missing key keeps its default" "$S" "home=1"
 [ ! -e "$T/executed" ] && ok || bad "something in the settings file was executed"
 expect "unknown switch" "$(ctl set blur 1)" "error=name"
 expect "unknown value" "$(ctl set gpu 2)" "error=value"

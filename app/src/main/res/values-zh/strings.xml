@@ -36,7 +36,8 @@
     <plurals name="keep_short">
         <item quantity="other">%1$d 个进程，%2$s</item>
     </plurals>
-    <string name="keep_of">共 %1$s</string>
+    <string name="keep_floor">保底</string>
+    <string name="keep_of">/ 上限 %1$s</string>
     <string name="keep_about">为已开启的进程设置内存保底，保底以内不被回收。</string>
     <string name="keep_na_official">当前系统已内置此功能</string>
     <string name="keep_na_controller">当前内核不支持</string>
@@ -46,11 +47,6 @@
     <string name="keep_ui_role">状态栏与通知面板</string>
     <string name="keep_home">桌面</string>
     <string name="keep_home_role">主屏幕与最近任务</string>
-    <string name="keep_sf_role">图层合成</string>
-    <string name="keep_composer">显示合成服务</string>
-    <string name="keep_composer_role">显示输出</string>
-    <string name="keep_alloc">图形分配服务</string>
-    <string name="keep_alloc_role">帧缓冲区分配</string>
     <string name="keep_server_role">窗口管理与输入</string>
     <string name="kept_wait">等待启动</string>
     <string name="kept_none">未找到</string>

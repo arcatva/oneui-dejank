@@ -45,12 +45,9 @@ class ScreenshotTest {
             "gpu" to "1", "gpu_state" to "on", "gpu_why" to "", "gpu_was" to "2",
             "kvmalloc" to "0", "kvmalloc_state" to "off", "kvmalloc_why" to "", "kvmalloc_seen" to "", "kvmalloc_changed" to "",
             "reserve" to "1", "reserve_state" to "on", "reserve_now" to "300", "reserve_stock" to "73",
-            "keep_why" to "", "mem_total_kb" to "11351040",
-            "ui" to "1", "ui_state" to "on", "ui_kb" to "861184", "ui_min_kb" to "798720",
-            "home" to "1", "home_state" to "on", "home_kb" to "824320", "home_min_kb" to "559104",
-            "sf" to "0", "sf_state" to "off", "sf_kb" to "", "sf_min_kb" to "",
-            "composer" to "0", "composer_state" to "off", "composer_kb" to "", "composer_min_kb" to "",
-            "alloc" to "0", "alloc_state" to "off", "alloc_kb" to "", "alloc_min_kb" to "",
+            "keep_why" to "", "mem_total_kb" to "11351040", "keep_cap_kb" to "1135100",
+            "ui" to "1", "ui_state" to "on", "ui_kb" to "286720", "ui_min_kb" to "137216",
+            "home" to "1", "home_state" to "on", "home_kb" to "188416", "home_min_kb" to "124928",
             "server" to "0", "server_state" to "off", "server_kb" to "", "server_min_kb" to "",
         )
         change.forEach { (k, v) -> map[k] = v }
@@ -65,10 +62,7 @@ class ScreenshotTest {
 
     /** Everything in the chain switched on, the way a phone looks a while after that. */
     private val all = arrayOf(
-        "sf" to "1", "sf_state" to "on", "sf_kb" to "56320", "sf_min_kb" to "40960",
-        "composer" to "1", "composer_state" to "on", "composer_kb" to "9216", "composer_min_kb" to "max",
-        "alloc" to "1", "alloc_state" to "wait", "alloc_kb" to "", "alloc_min_kb" to "max",
-        "server" to "1", "server_state" to "on", "server_kb" to "512000", "server_min_kb" to "430080",
+        "server" to "1", "server_state" to "on", "server_kb" to "231424", "server_min_kb" to "150528",
     )
 
     private fun shoot(
@@ -205,8 +199,7 @@ class ScreenshotTest {
         "gpu_state" to "na", "gpu_why" to "kernel", "gpu_series" to "android15-6.6", "gpu_was" to "",
         "kvmalloc_state" to "na", "kvmalloc_why" to "kernel",
         "keep_why" to "official",
-        "ui_state" to "na", "home_state" to "na", "sf_state" to "na",
-        "composer_state" to "na", "alloc_state" to "na", "server_state" to "na",
+        "ui_state" to "na", "home_state" to "na", "server_state" to "na",
         "ui_kb" to "", "ui_min_kb" to "", "home_kb" to "", "home_min_kb" to "",
     )
 

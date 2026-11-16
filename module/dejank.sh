@@ -16,11 +16,14 @@
 #          earlier, so apps rarely have to wait for it
 #
 # Kept in RAM, one switch and one memory group per process:
-#   ui home                    System UI and the home app; on by default,
-#                              restarted once into their groups
-#   sf composer alloc server   SurfaceFlinger, the display composer and
-#                              graphics allocator services, system_server;
-#                              moved as they are
+#   ui home   System UI and the home app; on by default, restarted once into
+#             their groups
+#   server    system_server; moved as it is
+# A process that is moved as it is brings nothing along: what it holds stays
+# with the group it came from, and only what it allocates from then on counts
+# for its new one. SurfaceFlinger and the two display services allocate next
+# to nothing after boot, so their floors came to a few megabytes at most.
+# Their switches are gone, and their groups are taken down by this version.
 # Each group gets a floor the kernel does not reclaim below. The rules are
 # those of Android's SystemMemoryBudgetManager as its documentation gives them
 # (source.android.com, "System memory budgets"; its source is not public yet):
@@ -52,9 +55,12 @@ RMDIR=${RMDIR:-rmdir}
 KILL=${KILL:-kill}
 # where the watcher goes to be nobody's child: the top of each hierarchy
 FREE=${FREE-"$CG /acct /dev/cg2_bpf /dev/freezer"}
+# and where it takes its share of the CPUs from
+BACK=${BACK-"/dev/cpuset /dev/cpuctl /dev/blkio"}
 REVIVE=${REVIVE:-1}
 NAP=${NAP:-0.1}
-KEEP="ui home sf composer alloc server"
+KEEP="ui home server"
+RETIRED="sf composer alloc" # switches of versions before this one
 SETTLE=${SETTLE:-"1 4 16 64"} # seconds after the start at which the floors are worked out
 REFRESH=${REFRESH:-1800}      # and seconds between two looks after that
 FLOOR_PCT=90                  # how much of what a process works with is kept
@@ -95,9 +101,6 @@ load_conf() {
     RESERVE=1
     K_ui=1
     K_home=1
-    K_sf=0
-    K_composer=0
-    K_alloc=0
     K_server=0
     c_pin=
     c_sys=
@@ -111,9 +114,6 @@ load_conf() {
         RESERVE) RESERVE=$v ;;
         KEEP_UI) K_ui=$v && c_new=1 ;;
         KEEP_HOME) K_home=$v && c_new=1 ;;
-        KEEP_SF) K_sf=$v && c_new=1 ;;
-        KEEP_COMPOSER) K_composer=$v && c_new=1 ;;
-        KEEP_ALLOC) K_alloc=$v && c_new=1 ;;
         KEEP_SERVER) K_server=$v && c_new=1 ;;
         PIN) c_pin=$v ;;
         SYS) c_sys=$v ;;
@@ -128,8 +128,8 @@ load_conf() {
 }
 
 save_conf() {
-    printf 'GPU=%s\nKVMALLOC=%s\nRESERVE=%s\nKEEP_UI=%s\nKEEP_HOME=%s\nKEEP_SF=%s\nKEEP_COMPOSER=%s\nKEEP_ALLOC=%s\nKEEP_SERVER=%s\n' \
-        "$GPU" "$KV" "$RESERVE" "$K_ui" "$K_home" "$K_sf" "$K_composer" "$K_alloc" "$K_server" >"$CONF.tmp" && mv "$CONF.tmp" "$CONF"
+    printf 'GPU=%s\nKVMALLOC=%s\nRESERVE=%s\nKEEP_UI=%s\nKEEP_HOME=%s\nKEEP_SERVER=%s\n' \
+        "$GPU" "$KV" "$RESERVE" "$K_ui" "$K_home" "$K_server" >"$CONF.tmp" && mv "$CONF.tmp" "$CONF"
 }
 
 # wanted <key>: is this switch on in the settings?
@@ -494,13 +494,8 @@ has_proc() {
     [ -n "$VAL" ]
 }
 
-# PSOUT: the process list, taken once for both vendor services
-ps_list() {
-    [ -n "$PSOUT" ] || PSOUT=$(ps -A -o PID,NAME 2>/dev/null)
-}
-
 any_group() {
-    for a in $KEEP; do
+    for a in $KEEP $RETIRED; do
         [ -d "$CG/dejank-$a" ] && return 0
     done
     [ -d "$CG/dejank" ] || [ -d "$CG/dejank-sys" ]
@@ -520,35 +515,17 @@ home_app() {
     case $HOMEAPP in '' | *[!a-zA-Z0-9._]*) HOMEAPP=$HOME_FALLBACK ;; esac
 }
 
-# Prints the pids of the process behind key $1. The display composer and the
-# graphics allocator are vendor services whose names differ between chips, so
-# those two are picked out of the process list.
-keep_pids() {
+# PIDS: the pids of the process behind key $1
+pids_of() {
     case $1 in
-    ui) pidof "$SYSTEMUI" 2>/dev/null ;;
+    ui) PIDS=$(pidof "$SYSTEMUI" 2>/dev/null) ;;
     home)
         [ -n "$HOMEAPP" ] || home_app
-        pidof "$HOMEAPP" 2>/dev/null
+        PIDS=$(pidof "$HOMEAPP" 2>/dev/null)
         ;;
-    sf) pidof surfaceflinger 2>/dev/null ;;
-    server) pidof system_server 2>/dev/null ;;
-    composer | alloc)
-        ps_list
-        echo "$PSOUT" | while read -r p n; do
-            is_num "$p" || continue
-            case $1:$n in
-            composer:*hardware*composer*) echo "$p" ;;
-            alloc:*graphics.allocator* | alloc:*display.allocator*) echo "$p" ;;
-            esac
-        done
-        ;;
+    server) PIDS=$(pidof system_server 2>/dev/null) ;;
+    *) PIDS= ;;
     esac
-}
-
-# PIDS: the same, with the process list taken once for both vendor services
-pids_of() {
-    case $1 in composer | alloc) ps_list ;; esac
-    PIDS=$(keep_pids "$1")
 }
 
 # OFFICIAL: 1 when this Android keeps these processes in RAM itself, 0 when it
@@ -636,6 +613,10 @@ legacy_drop() {
     rm -f "$RUN/watch.pin" "$RUN/watch.sys"
     grp_drop "$CG/dejank"
     grp_drop "$CG/dejank-sys"
+    for l_d in $RETIRED; do
+        rm -f "$RUN/watch.$l_d" "$RUN/raw.$l_d" "$RUN/since.$l_d" "$RUN/floored.$l_d"
+        grp_drop "$CG/dejank-$l_d"
+    done
 }
 
 # in_group <pid> <group>
@@ -844,6 +825,15 @@ watch_free() {
     for w_cg in $FREE; do
         [ -f "$w_cg/cgroup.procs" ] && echo $$ >>"$w_cg/cgroup.procs" 2>/dev/null
     done
+    # it has the CPU share of the app that started it, the one on the screen:
+    # the background's is its own, or failing that nobody's
+    for w_cg in $BACK; do
+        if [ -f "$w_cg/system-background/cgroup.procs" ]; then
+            echo $$ >>"$w_cg/system-background/cgroup.procs" 2>/dev/null
+        elif [ -f "$w_cg/cgroup.procs" ]; then
+            echo $$ >>"$w_cg/cgroup.procs" 2>/dev/null
+        fi
+    done
     [ -f "$PROC/$$/oom_score_adj" ] && echo -1000 >"$PROC/$$/oom_score_adj" 2>/dev/null
     return 0
 }
@@ -893,7 +883,6 @@ keep_on() {
     grp "$1"
     grp_setup "$G" || return 1
     [ "$1" = home ] && home_app ask
-    PSOUT=
     place "$1"
     k_in=0
     has_proc "$G" && k_in=1
@@ -1000,7 +989,6 @@ watch() {
             grp "$d"
             grp_setup "$G" || continue
             : >"$RUN/watch.$d"
-            PSOUT=
             place "$d"
         done
         legacy_drop
@@ -1026,7 +1014,6 @@ watch() {
     i=0
     while first "$RUN/watch.token" && [ "$VAL" = "$token" ]; do
         any_mark || return 0
-        PSOUT=
         for d in $KEEP; do
             [ -f "$RUN/watch.$d" ] || continue
             # only the two apps start during boot; the rest is looked at every 20 s
@@ -1087,6 +1074,7 @@ takeover() {
     [ ! -f "$PAUSE" ] || return 0
     load_conf
     if [ "$KV" = 1 ] && kv_stale; then kv_on; fi
+    legacy_drop
     any_mark || return 0
     watch_start
 }
@@ -1153,9 +1141,10 @@ status() {
     echo "keep_why=$KEEP_WHY"
     mem_total
     echo "mem_total_kb=$MEMKB"
+    # the most all floors may come to together
+    if [ -n "$MEMKB" ]; then echo "keep_cap_kb=$((MEMKB / 100 * CAP_PCT))"; else echo "keep_cap_kb="; fi
     home_app
     echo "home_app=$HOMEAPP"
-    PSOUT=
     for d in $KEEP; do
         eval "w=\$K_$d"
         keep_state "$d"
@@ -1178,7 +1167,7 @@ set)
     gpu) GPU=$3 && fn=gpu ;;
     kvmalloc) KV=$3 && fn=kv ;;
     reserve) RESERVE=$3 && fn=reserve ;;
-    ui | home | sf | composer | alloc | server) eval "K_$2=\$3" && fn="keep" ;;
+    ui | home | server) eval "K_$2=\$3" && fn="keep" ;;
     *) echo "error=name" && exit 1 ;;
     esac
     save_conf
@@ -1219,7 +1208,7 @@ guard)
 settled) rm -f "$GUARD" ;;
 log) tail -n "${2:-50}" "$LOG" 2>/dev/null ;;
 *)
-    echo "usage: dejank.sh status | set <gpu|kvmalloc|reserve|ui|home|sf|composer|alloc|server> <0|1> | apply | resume | log [lines]"
+    echo "usage: dejank.sh status | set <gpu|kvmalloc|reserve|ui|home|server> <0|1> | apply | resume | log [lines]"
     exit 1
     ;;
 esac
