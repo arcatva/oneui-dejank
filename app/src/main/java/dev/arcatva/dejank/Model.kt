@@ -211,7 +211,6 @@ data class Status(
     private fun noBuild(): Line =
         if (gpuSeries.isEmpty()) lineOf(R.string.gpu_na_kernel) else lineOf(R.string.gpu_na_series, gpuSeries)
 
-
     /** Next to a process's switch: how much of it is kept, or what it waits for. Null when there is nothing to say. */
     fun value(keep: Keep): Line? {
         val k = kept(keep)

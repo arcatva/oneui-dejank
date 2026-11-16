@@ -8,7 +8,7 @@ T=$(mktemp -d /tmp/dejank.XXXXXX)
 trap 'rm -rf "$T"' EXIT
 
 export DATA=$T/data RUN=$T/run PROC=$T/proc VM=$T/vm SYSMOD=$T/sysmod CG=$T/cg
-export RMDIR="rm -rf" KILL=$T/bin/kill9 NAP=0 WATCH_FAST=0 WATCH_ROUNDS=2 WATCH_ONCE=1 BOOT_RECLAIM_AFTER=0 KV_HOLD=0 T
+export RMDIR="rm -rf" KILL=$T/bin/kill9 NAP=0 WATCH_FAST=0 WATCH_ROUNDS=2 WATCH_ONCE=1 BOOT_RECLAIM_AFTER=0 KV_HOLD=0 FREE= REVIVE=0 T
 KO=$T/mod/kmod/kgsl_nowait-android16-6.12.ko
 KVKO=$T/mod/kmod/kvmalloc_nowait-android16-6.12.ko
 HOOK="ffffffc008123450 T __traceiter_android_vh_adjust_kvmalloc_flags"
@@ -264,6 +264,74 @@ logged "the kernel's reason is logged" "insmod failed: insmod: failed to load: E
 rm -f "$T/insmod.fail"
 expect "a later try works" "$(ctl set gpu 1)" "ok=1"
 has "and clears the error" "$(ctl status)" "gpu_state=on"
+
+# ---------------------------------------------------------- the watcher's own life
+not_logged() { if grep -q -- "$2" "$DATA/log" 2>/dev/null; then bad "$1 -> in the log: $2"; else ok; fi; }
+
+# it leaves the group of whoever started it, or it is frozen and killed with that app
+phone
+ctl set ui 1 >/dev/null
+sleep 0.3
+mkdir -p "$T/free" && : >"$T/free/cgroup.procs"
+FREE="$T/free $T/nowhere" ctl watch keep
+[ -s "$T/free/cgroup.procs" ] && ok || bad "the watcher stayed where it was started"
+logged "its start is logged" "watcher: started"
+has "without a look-out, a watcher that has ended is only reported" "$(ctl status)" "watcher=0"
+
+# gone: whoever looks next starts it again
+phone
+ctl set ui 1 >/dev/null
+sleep 0.3
+echo 999999 >"$RUN/watch.token"
+: >"$DATA/log"
+S=$(REVIVE=1 ctl status)
+logged "a watcher that is gone is started again" "watcher: was gone, started again"
+has "and counts as running" "$S" "watcher=1"
+sleep 0.3
+
+# there: left alone
+phone
+ctl set ui 1 >/dev/null
+sleep 0.3
+mkdir -p "$PROC/4242" && printf 'sh\0/x/dejank.sh\0watch\0keep\0' >"$PROC/4242/cmdline"
+echo 4242 >"$RUN/watch.token"
+: >"$DATA/log"
+S=$(REVIVE=1 ctl status)
+has "a watcher that is there counts as running" "$S" "watcher=1"
+not_logged "and is not started twice" "watcher:"
+# the number of a process that is something else by now
+printf 'sleep\020\0' >"$PROC/4242/cmdline"
+REVIVE=1 ctl status >/dev/null
+logged "another process under its number is not the watcher" "watcher: was gone, started again"
+sleep 0.3
+
+# on its way: not taken for gone, unless it never arrived
+phone
+ctl set ui 1 >/dev/null
+sleep 0.3
+echo "start 990" >"$RUN/watch.token"
+: >"$DATA/log"
+S=$(REVIVE=1 ctl status)
+has "a watcher just started counts as running" "$S" "watcher=1"
+not_logged "and is given time" "watcher:"
+echo "start 900" >"$RUN/watch.token"
+REVIVE=1 ctl status >/dev/null
+logged "one that never arrived is started again" "watcher: was gone, started again"
+sleep 0.3
+
+# nothing to watch, or paused: no watcher
+phone
+mkdir -p "$DATA" && : >"$DATA/log"
+has "nothing kept, no watcher" "$(REVIVE=1 ctl status)" "watcher=0"
+not_logged "and none is started" "watcher:"
+phone
+ctl set ui 1 >/dev/null
+sleep 0.3
+echo 999999 >"$RUN/watch.token"
+: >"$DATA/paused"
+: >"$DATA/log"
+has "paused, no watcher" "$(REVIVE=1 ctl status)" "watcher=0"
+not_logged "and none is started while paused" "watcher:"
 
 # ---------------------------------------------------------- kvmalloc
 phone

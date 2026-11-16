@@ -50,6 +50,9 @@ SYSMOD=${SYSMOD:-/sys/module}
 CG=${CG:-/sys/fs/cgroup}
 RMDIR=${RMDIR:-rmdir}
 KILL=${KILL:-kill}
+# where the watcher goes to be nobody's child: the top of each hierarchy
+FREE=${FREE-"$CG /acct /dev/cg2_bpf /dev/freezer"}
+REVIVE=${REVIVE:-1}
 NAP=${NAP:-0.1}
 KEEP="ui home sf composer alloc server"
 SETTLE=${SETTLE:-"1 4 16 64"} # seconds after the start at which the floors are worked out
@@ -829,7 +832,51 @@ boot_reclaim() {
 # over from one that is already running.
 watch_start() {
     floors_begin
+    # on its way: nobody takes it for gone before it has put its own name there
+    echo "start $UP" >"$RUN/watch.token"
     detach watch keep
+}
+
+# A root shell that an app starts sits in that app's cgroup: Android freezes
+# the group when the app leaves the screen and kills it with the app. So the
+# watcher goes to the top of each hierarchy, where a daemon lives.
+watch_free() {
+    for w_cg in $FREE; do
+        [ -f "$w_cg/cgroup.procs" ] && echo $$ >>"$w_cg/cgroup.procs" 2>/dev/null
+    done
+    [ -f "$PROC/$$/oom_score_adj" ] && echo -1000 >"$PROC/$$/oom_score_adj" 2>/dev/null
+    return 0
+}
+
+# Whether the watcher that holds the token is still there.
+watch_runs() {
+    first "$RUN/watch.token"
+    case $VAL in
+    "start "*)
+        w_at=${VAL#start }
+        uptime_s
+        is_num "$w_at" && [ $((UP - w_at)) -lt 30 ]
+        return
+        ;;
+    esac
+    is_num "$VAL" || return 1
+    [ -f "$PROC/$VAL/cmdline" ] || return 1
+    grep -q 'dejank\.sh' "$PROC/$VAL/cmdline" 2>/dev/null
+}
+
+# A watcher that is gone is started again by whoever looks next: the app asks
+# for the status every time it is opened. WATCHER: 1 when one is running.
+watch_revive() {
+    WATCHER=0
+    [ ! -f "$PAUSE" ] && any_mark || return 0
+    if watch_runs; then
+        WATCHER=1
+    elif [ "$REVIVE" = 1 ]; then
+        log "watcher: was gone, started again"
+        watch_start
+        WATCHER=1
+    fi
+    return 0
 }
 
 any_mark() {
@@ -932,6 +979,7 @@ keep_state() {
 watch() {
     load_conf
     [ ! -f "$PAUSE" ] || return 0
+    watch_free
     w_boot=0
     if [ "$1" != keep ]; then
         # only once it is known whether this Android does the same itself
@@ -963,6 +1011,7 @@ watch() {
     [ -f "$RUN/floor.start" ] || floors_begin
     token=$$
     echo "$token" >"$RUN/watch.token"
+    log "watcher: started"
     home_app
     for d in $KEEP; do
         [ -f "$RUN/watch.$d" ] || continue
@@ -1072,6 +1121,7 @@ apply() {
 status() {
     load_conf
     kv_guard
+    watch_revive
     gpu_state
     kv_state
     reserve_state
@@ -1095,6 +1145,7 @@ status() {
     echo "kvmalloc_why=$KV_WHY"
     echo "kvmalloc_seen=$KV_SEEN"
     echo "kvmalloc_changed=$KV_CHANGED"
+    echo "watcher=$WATCHER"
     echo "reserve=$RESERVE"
     echo "reserve_state=$RES_STATE"
     echo "reserve_now=$RES_NOW"
