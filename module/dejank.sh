@@ -9,9 +9,9 @@
 #
 # gpu      loads kgsl_nowait.ko: the Adreno driver takes a smaller block of
 #          memory at once instead of waiting for a large one
-# kvmalloc loads kvmalloc_nowait.ko: kernel requests of more than 32 KB that
-#          can do without contiguous memory take single pages at once
-#          instead of waiting for one block; off unless switched on
+# kvmalloc loads kvmalloc_nowait.ko: a kernel request that can do without
+#          contiguous memory no longer frees memory on the spot to get it,
+#          as from Linux 6.16; off unless switched on
 # reserve  vm.watermark_scale_factor = 300: memory is freed in the background
 #          earlier, so apps rarely have to wait for it
 #
@@ -63,7 +63,8 @@ PAUSE=$DATA/paused
 WSF=$VM/watermark_scale_factor
 KPARAM=$SYSMOD/kgsl_nowait/parameters
 KVPARAM=$SYSMOD/kvmalloc_nowait/parameters
-KV_HOOK=__traceiter_android_vh_kvmalloc_node_use_vmalloc
+KV_HOOK=__traceiter_android_vh_adjust_kvmalloc_flags
+KV_VERSION=2 # of kvmalloc_nowait.ko as this script expects it
 KV_TRY=$DATA/kvmalloc.trying   # the boot and second the hook was switched on in, until it has held
 KV_TRIP=$DATA/kvmalloc.tripped # the phone went down before that
 KV_HOLD=${KV_HOLD:-3}
@@ -298,14 +299,15 @@ kv_hook() {
 #   hook     this kernel is without Android's hook
 #   insmod   the kernel did not take the module
 #   reboot   the phone went down right after the hook was switched on
-# KV_SEEN, KV_SENT: requests above the limit, and how many went to vmalloc()
+# KV_SEEN, KV_CHANGED: requests of more than a page, and how many of their
+# first attempts lost the wait
 kv_state() {
     KV_WHY=
     KV_SEEN=
-    KV_SENT=
+    KV_CHANGED=
     if [ -d "$KVPARAM" ]; then
         first "$KVPARAM/seen" && KV_SEEN=$VAL
-        first "$KVPARAM/sent" && KV_SENT=$VAL
+        first "$KVPARAM/changed" && KV_CHANGED=$VAL
         first "$KVPARAM/enabled"
         if [ "$VAL" = 1 ]; then KV_STATE=on; else KV_STATE=off; fi
         return 0
@@ -355,8 +357,20 @@ kv_guard() {
     return 0
 }
 
+# A module left loaded by another version of this script does something else
+# or counts something else: it goes, so that the one of this version comes.
+kv_stale() {
+    [ -d "$SYSMOD/kvmalloc_nowait" ] || return 1
+    first "$SYSMOD/kvmalloc_nowait/version"
+    [ "$VAL" != "$KV_VERSION" ]
+}
+
 kv_on() {
     rm -f "$KV_TRIP"
+    if kv_stale; then
+        rmmod kvmalloc_nowait 2>/dev/null || return 1
+        log "kvmalloc: the module of another version is out"
+    fi
     if [ -d "$KVPARAM" ]; then
         echo 1 >"$KVPARAM/enabled" 2>/dev/null
         return 0
@@ -382,9 +396,9 @@ kv_on() {
 kv_off() {
     rm -f "$RUN/kvmalloc.err" "$KV_TRIP" "$KV_TRY"
     [ -d "$SYSMOD/kvmalloc_nowait" ] || return 0
-    first "$KVPARAM/sent"
+    first "$KVPARAM/changed"
     rmmod kvmalloc_nowait 2>/dev/null || echo 0 >"$KVPARAM/enabled" 2>/dev/null
-    log "kvmalloc: off, ${VAL:-0} requests went to vmalloc"
+    log "kvmalloc: off, ${VAL:-0} requests did not wait"
 }
 
 # ------------------------------------------------------------- reserve
@@ -1022,6 +1036,8 @@ watch() {
 # is running; nothing is restarted and no switch changes.
 takeover() {
     [ ! -f "$PAUSE" ] || return 0
+    load_conf
+    if [ "$KV" = 1 ] && kv_stale; then kv_on; fi
     any_mark || return 0
     watch_start
 }
@@ -1065,7 +1081,7 @@ status() {
     [ "$OFFICIAL" = 1 ] && KEEP_WHY=official
     paused=0
     [ -f "$PAUSE" ] && paused=1
-    echo "api=4"
+    echo "api=5"
     echo "version=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)"
     echo "build=$(sed -n 's/^versionCode=//p' "$MODDIR/module.prop" 2>/dev/null)"
     echo "paused=$paused"
@@ -1078,7 +1094,7 @@ status() {
     echo "kvmalloc_state=$KV_STATE"
     echo "kvmalloc_why=$KV_WHY"
     echo "kvmalloc_seen=$KV_SEEN"
-    echo "kvmalloc_sent=$KV_SENT"
+    echo "kvmalloc_changed=$KV_CHANGED"
     echo "reserve=$RESERVE"
     echo "reserve_state=$RES_STATE"
     echo "reserve_now=$RES_NOW"

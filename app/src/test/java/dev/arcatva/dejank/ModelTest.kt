@@ -9,9 +9,9 @@ import org.junit.Test
 class ModelTest {
     private fun status(vararg change: Pair<String, String>): Status {
         val map = linkedMapOf(
-            "api" to "4", "version" to "v0.2.0", "build" to "4", "paused" to "0",
+            "api" to "5", "version" to "v0.2.0", "build" to "4", "paused" to "0",
             "gpu" to "1", "gpu_state" to "on", "gpu_why" to "", "gpu_was" to "2",
-            "kvmalloc" to "0", "kvmalloc_state" to "off", "kvmalloc_why" to "", "kvmalloc_seen" to "", "kvmalloc_sent" to "",
+            "kvmalloc" to "0", "kvmalloc_state" to "off", "kvmalloc_why" to "", "kvmalloc_seen" to "", "kvmalloc_changed" to "",
             "reserve" to "1", "reserve_state" to "on", "reserve_now" to "300", "reserve_stock" to "73",
             "keep_why" to "", "mem_total_kb" to "11351040",
             "ui" to "1", "ui_state" to "on", "ui_kb" to "861184", "ui_min_kb" to "798720",
@@ -160,10 +160,10 @@ class ModelTest {
     @Test
     fun `the hook into kvmalloc is a second switch of the GPU tile`() {
         assertEquals(listOf(Fix.GPU, Fix.KVMALLOC), Tile.GPU.fixes)
-        val on = status("kvmalloc" to "1", "kvmalloc_state" to "on", "kvmalloc_seen" to "1300", "kvmalloc_sent" to "1234")
+        val on = status("kvmalloc" to "1", "kvmalloc_state" to "on", "kvmalloc_seen" to "1300", "kvmalloc_changed" to "1234")
         assertNull(on.note(Fix.KVMALLOC))
         assertEquals(Tone.GOOD, on.tone(Fix.KVMALLOC))
-        assertEquals(countOf(R.plurals.kvmalloc_sent, 1234), on.value(Fix.KVMALLOC))
+        assertEquals(countOf(R.plurals.kvmalloc_changed, 1234), on.value(Fix.KVMALLOC))
         assertNull(on.value(Fix.GPU))
         // a tile is one of three however many of its switches are on
         assertEquals(3, on.working)

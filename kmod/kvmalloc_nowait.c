@@ -9,30 +9,38 @@
  * thread that draws: the Adreno driver keeps the list of a buffer's pages in
  * such a block, 36 KB for a full screen.
  *
- * Linux 6.16 took the waiting out of the first attempt ("mm: kvmalloc: make
- * kmalloc fast path real fast path"). Android's 6.12 kernel has a vendor hook
- * at the top of the function instead, android_vh_kvmalloc_node_use_vmalloc,
- * with which a module sends a request straight to vmalloc(). This module
- * registers a probe on that hook and does so for requests larger than
- * PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER (32 KB with 4 KB pages): from there on
- * the first attempt needs a block of an order the kernel itself calls costly.
- * Smaller requests stay as they are.
+ * Linux 6.16 took the waiting out ("mm: kvmalloc: make kmalloc fast path real
+ * fast path"). Where kmalloc_gfp_adjust() in 6.12 has
  *
- * Only requests the kernel's own fallback would accept are sent there, so a
- * caller gets nothing it could not get before. No kernel code is changed;
- * unloading the module takes the probe off again.
+ *	if (size > PAGE_SIZE) {
+ *		...
+ *		if (!(flags & __GFP_RETRY_MAYFAIL))
+ *			flags |= __GFP_NORETRY;
+ *
+ * it now has
+ *
+ *			flags &= ~__GFP_DIRECT_RECLAIM;
+ *
+ * Android's 6.12 kernel calls a vendor hook at the end of that function,
+ * android_vh_adjust_kvmalloc_flags, with the order of the request and the
+ * flags of the first attempt. The probe registered here makes the change of
+ * 6.16 there, under the same two conditions and nothing else: an order above
+ * 0 is a size above PAGE_SIZE. __GFP_NORETRY, which 6.12 has set by then,
+ * says how hard to reclaim and means nothing to an attempt that does not.
+ * The flags of the fallback are the caller's own and are not seen here.
+ *
+ * No kernel code is changed; unloading the module takes the probe off again.
  *
  *   insmod kvmalloc_nowait.ko
  *   /sys/module/kvmalloc_nowait/parameters/enabled  1: as above, 0: every request as the kernel has it
- *   /sys/module/kvmalloc_nowait/parameters/seen     requests above the limit since loading
- *   /sys/module/kvmalloc_nowait/parameters/sent     of those, sent straight to vmalloc()
+ *   /sys/module/kvmalloc_nowait/parameters/seen     requests above PAGE_SIZE since loading
+ *   /sys/module/kvmalloc_nowait/parameters/changed  of those, first attempts that lost the wait
  */
 #define pr_fmt(fmt) "kvmalloc_nowait: " fmt
 
 #include <linux/atomic.h>
 #include <linux/gfp.h>
 #include <linux/kernel.h>
-#include <linux/limits.h>
 #include <linux/mm.h>
 #include <linux/mmzone.h>
 #include <linux/module.h>
@@ -41,29 +49,25 @@
 #include <linux/tracepoint.h>
 #include <trace/hooks/mm.h>
 
-#define LIMIT	(PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER)
-
 static unsigned int enabled = 1;
 static atomic_long_t seen;
-static atomic_long_t sent;
+static atomic_long_t changed;
 
-static void kv_probe(void *data, size_t size, gfp_t *kmalloc_flags, bool *use_vmalloc)
+static void kv_probe(void *data, unsigned int order, gfp_t *alloc_flags)
 {
-	gfp_t flags = *kmalloc_flags;
+	gfp_t flags = *alloc_flags;
 
-	if (size <= LIMIT)
+	if (!order)
 		return;
 	atomic_long_inc(&seen);
 	if (!READ_ONCE(enabled))
 		return;
-	/* what the kernel's own fallback turns away stays with the kernel */
-	if (!gfpflags_allow_blocking(flags) || size > INT_MAX)
-		return;
-	/* the caller asked for contiguous memory to be tried hard */
 	if (flags & __GFP_RETRY_MAYFAIL)
 		return;
-	*use_vmalloc = true;
-	atomic_long_inc(&sent);
+	if (!(flags & __GFP_DIRECT_RECLAIM))
+		return;
+	*alloc_flags = flags & ~__GFP_DIRECT_RECLAIM;
+	atomic_long_inc(&changed);
 }
 
 static int enabled_set(const char *val, const struct kernel_param *kp)
@@ -89,7 +93,7 @@ static const struct kernel_param_ops enabled_ops = {
 	.get = enabled_get,
 };
 module_param_cb(enabled, &enabled_ops, NULL, 0644);
-MODULE_PARM_DESC(enabled, "1: large requests go straight to vmalloc(); 0: every request as the kernel has it");
+MODULE_PARM_DESC(enabled, "1: the first attempt of kvmalloc() does not reclaim; 0: every request as the kernel has it");
 
 static int count_get(char *buf, const struct kernel_param *kp)
 {
@@ -100,33 +104,34 @@ static const struct kernel_param_ops count_ops = {
 	.get = count_get,
 };
 module_param_cb(seen, &count_ops, &seen, 0444);
-MODULE_PARM_DESC(seen, "requests above the limit since loading");
-module_param_cb(sent, &count_ops, &sent, 0444);
-MODULE_PARM_DESC(sent, "requests sent straight to vmalloc()");
+MODULE_PARM_DESC(seen, "requests above PAGE_SIZE since loading");
+module_param_cb(changed, &count_ops, &changed, 0444);
+MODULE_PARM_DESC(changed, "first attempts that lost the wait");
 
 static int __init kvmalloc_nowait_init(void)
 {
-	int ret = register_trace_android_vh_kvmalloc_node_use_vmalloc(kv_probe, NULL);
+	int ret = register_trace_android_vh_adjust_kvmalloc_flags(kv_probe, NULL);
 
 	if (ret) {
 		pr_err("the hook did not take the probe (%d): nothing done\n", ret);
 		return ret;
 	}
-	pr_info("requests over %lu bytes go straight to vmalloc()\n", (unsigned long)LIMIT);
+	pr_info("the first attempt of kvmalloc() no longer reclaims, as from Linux 6.16\n");
 	return 0;
 }
 
 static void __exit kvmalloc_nowait_exit(void)
 {
-	unregister_trace_android_vh_kvmalloc_node_use_vmalloc(kv_probe, NULL);
+	unregister_trace_android_vh_adjust_kvmalloc_flags(kv_probe, NULL);
 	/* nobody may still be inside the probe when its code goes away */
 	tracepoint_synchronize_unregister();
-	pr_info("off: %ld of %ld large requests were sent to vmalloc()\n",
-		atomic_long_read(&sent), atomic_long_read(&seen));
+	pr_info("off: %ld of %ld first attempts were changed\n",
+		atomic_long_read(&changed), atomic_long_read(&seen));
 }
 
 module_init(kvmalloc_nowait_init);
 module_exit(kvmalloc_nowait_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Sends large kvmalloc() requests straight to vmalloc(), through Android's vendor hook");
+MODULE_VERSION("2");
+MODULE_DESCRIPTION("kvmalloc() without the wait in its first attempt, as from Linux 6.16, through Android's vendor hook");

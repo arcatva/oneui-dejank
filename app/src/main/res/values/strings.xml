@@ -29,10 +29,10 @@
     <string name="gpu_na_series">%1$s is not supported yet</string>
     <string name="gpu_err">The kernel rejected the module</string>
 
-    <string name="kvmalloc_switch">Use vmalloc for large kernel allocations</string>
+    <string name="kvmalloc_switch">Fall back to vmalloc</string>
     <string name="kvmalloc_na_builtin">Built into this kernel</string>
     <string name="kvmalloc_err_reboot">Turned off: the device restarted after it was enabled</string>
-    <plurals name="kvmalloc_sent">
+    <plurals name="kvmalloc_changed">
         <item quantity="one">%,d request</item>
         <item quantity="other">%,d requests</item>
     </plurals>

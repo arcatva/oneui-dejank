@@ -25,10 +25,10 @@
     <string name="gpu_na_series">暂未适配 %1$s</string>
     <string name="gpu_err">内核拒绝加载模块</string>
 
-    <string name="kvmalloc_switch">大块内核分配改用 vmalloc</string>
+    <string name="kvmalloc_switch">连续内存不足时回退 vmalloc</string>
     <string name="kvmalloc_na_builtin">当前内核已内置</string>
     <string name="kvmalloc_err_reboot">开启后设备重启，已关闭</string>
-    <plurals name="kvmalloc_sent">
+    <plurals name="kvmalloc_changed">
         <item quantity="other">%,d 次</item>
     </plurals>
 

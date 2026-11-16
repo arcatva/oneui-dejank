@@ -3,7 +3,7 @@ package dev.arcatva.dejank
 import java.util.Locale
 
 /** The version of dejank.sh's status output this app understands. */
-const val EXPECTED_API = 4
+const val EXPECTED_API = 5
 
 enum class ThemeChoice(val label: Int) {
     DARK(R.string.theme_dark),
@@ -129,8 +129,8 @@ data class Status(
     val gpuSeries: String = "",
     /** Why the hook into kvmalloc is not on: "builtin", "kernel", "hook", "insmod", "reboot", or empty. */
     val kvmallocWhy: String = "",
-    /** Requests the hook has sent to vmalloc since it was loaded. */
-    val kvmallocSent: Long? = null,
+    /** Requests whose first attempt the hook has kept from waiting since it was loaded. */
+    val kvmallocChanged: Long? = null,
     /** Why nothing can be kept in RAM here: "official" (Android does it itself), "controller", or empty. */
     val keepWhy: String = "",
     val memTotalKb: Long? = null,
@@ -216,7 +216,7 @@ data class Status(
     /** Under a fix's switch while it is on: what it has done so far. Null when there is nothing to count. */
     fun value(fix: Fix): Line? {
         if (fix != Fix.KVMALLOC || state(fix) != FixState.ON) return null
-        return kvmallocSent?.let { countOf(R.plurals.kvmalloc_sent, it.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()) }
+        return kvmallocChanged?.let { countOf(R.plurals.kvmalloc_changed, it.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()) }
     }
 
     /** Next to a process's switch: how much of it is kept, or what it waits for. Null when there is nothing to say. */
@@ -298,7 +298,7 @@ fun parseStatus(text: String): Status? {
         gpuWhy = map["gpu_why"].orEmpty(),
         gpuSeries = map["gpu_series"].orEmpty(),
         kvmallocWhy = map["kvmalloc_why"].orEmpty(),
-        kvmallocSent = map["kvmalloc_sent"]?.toLongOrNull(),
+        kvmallocChanged = map["kvmalloc_changed"]?.toLongOrNull(),
         keepWhy = map["keep_why"].orEmpty(),
         memTotalKb = map["mem_total_kb"]?.toLongOrNull(),
         kept = Keep.entries.associateWith { keep ->

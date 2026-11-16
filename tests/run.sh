@@ -11,7 +11,7 @@ export DATA=$T/data RUN=$T/run PROC=$T/proc VM=$T/vm SYSMOD=$T/sysmod CG=$T/cg
 export RMDIR="rm -rf" KILL=$T/bin/kill9 NAP=0 WATCH_FAST=0 WATCH_ROUNDS=2 WATCH_ONCE=1 BOOT_RECLAIM_AFTER=0 KV_HOLD=0 T
 KO=$T/mod/kmod/kgsl_nowait-android16-6.12.ko
 KVKO=$T/mod/kmod/kvmalloc_nowait-android16-6.12.ko
-HOOK="ffffffc008123450 T __traceiter_android_vh_kvmalloc_node_use_vmalloc"
+HOOK="ffffffc008123450 T __traceiter_android_vh_adjust_kvmalloc_flags"
 ADDR=ffffffc07e322f20
 
 # ---------------------------------------------------------- the phone
@@ -58,9 +58,10 @@ case $1 in
     [ -f "$DATA/kvmalloc.trying" ] && echo "noted $(cat "$DATA/kvmalloc.trying")" >>"$T/calls"
     p=$SYSMOD/kvmalloc_nowait/parameters
     /bin/mkdir -p "$p"
+    echo 2 >"$SYSMOD/kvmalloc_nowait/version"
     echo 1 >"$p/enabled"
     echo 12 >"$p/seen"
-    echo 9 >"$p/sent"
+    echo 9 >"$p/changed"
     exit 0
     ;;
 esac
@@ -183,7 +184,7 @@ logged() { if grep -q -- "$2" "$DATA/log" 2>/dev/null; then ok; else bad "$1 -> 
 # ---------------------------------------------------------- a fresh phone
 phone
 S=$(ctl status)
-has "api" "$S" "api=4"
+has "api" "$S" "api=5"
 has "version" "$S" "version=$(sed -n 's/^version=//p' "$SRC/module.prop")"
 has "build" "$S" "build=$(sed -n 's/^versionCode=//p' "$SRC/module.prop")"
 has "everything is wanted by default" "$S" "gpu=1"
@@ -273,8 +274,8 @@ called "the boot and the second are noted before the hook goes in" "noted 111111
 S=$(ctl status)
 has "kvmalloc is on" "$S" "kvmalloc_state=on"
 has "wanted" "$S" "kvmalloc=1"
-has "requests above the limit" "$S" "kvmalloc_seen=12"
-has "requests sent to vmalloc" "$S" "kvmalloc_sent=9"
+has "requests of more than a page" "$S" "kvmalloc_seen=12"
+has "first attempts that lost the wait" "$S" "kvmalloc_changed=9"
 has "the gpu switch is another one" "$S" "gpu_state=off"
 logged "kvmalloc on is logged" "kvmalloc: on"
 expect "the switch is saved" "$(grep '^KVMALLOC=' "$DATA/conf")" "KVMALLOC=1"
@@ -283,8 +284,8 @@ called "the module is unloaded" "rmmod kvmalloc_nowait"
 S=$(ctl status)
 has "kvmalloc is off" "$S" "kvmalloc_state=off"
 has "off is remembered" "$S" "kvmalloc=0"
-has "no numbers without the module" "$S" "kvmalloc_sent="
-logged "what it did is logged" "kvmalloc: off, 9 requests went to vmalloc"
+has "no numbers without the module" "$S" "kvmalloc_changed="
+logged "what it did is logged" "kvmalloc: off, 9 requests did not wait"
 
 phone
 ctl set gpu 1 >/dev/null
@@ -329,6 +330,25 @@ has "the error is insmod" "$S" "kvmalloc_why=insmod"
 rm -f "$T/insmod.fail"
 expect "a later try works" "$(ctl set kvmalloc 1)" "ok=1"
 has "and clears the error" "$(ctl status)" "kvmalloc_state=on"
+
+# an update finds the module of the version before it loaded
+phone
+ctl set kvmalloc 1 >/dev/null
+echo 1 >"$SYSMOD/kvmalloc_nowait/version"
+: >"$T/calls"
+ctl takeover
+called "the module of another version is taken out" "rmmod kvmalloc_nowait"
+called "and the one of this version goes in" "insmod $KVKO"
+expect "which is the one loaded now" "$(cat "$SYSMOD/kvmalloc_nowait/version")" "2"
+logged "that is logged" "kvmalloc: the module of another version is out"
+: >"$T/calls"
+ctl takeover
+not_called "a module of this version stays" "rmmod"
+ctl set kvmalloc 0 >/dev/null
+mkdir -p "$SYSMOD/kvmalloc_nowait/parameters" && echo 1 >"$SYSMOD/kvmalloc_nowait/version"
+: >"$T/calls"
+ctl takeover
+not_called "nothing is loaded for a switch that is off" "insmod"
 
 # the note of a start: it goes when the hook has held, and trips the switch after a reboot
 phone

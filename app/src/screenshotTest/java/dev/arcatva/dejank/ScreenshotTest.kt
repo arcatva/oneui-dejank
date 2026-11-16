@@ -41,9 +41,9 @@ class ScreenshotTest {
 
     private fun status(vararg change: Pair<String, String>): Status {
         val map = linkedMapOf(
-            "api" to "4", "version" to "v0.2.0", "build" to "4", "paused" to "0",
+            "api" to "5", "version" to "v0.2.0", "build" to "4", "paused" to "0",
             "gpu" to "1", "gpu_state" to "on", "gpu_why" to "", "gpu_was" to "2",
-            "kvmalloc" to "0", "kvmalloc_state" to "off", "kvmalloc_why" to "", "kvmalloc_seen" to "", "kvmalloc_sent" to "",
+            "kvmalloc" to "0", "kvmalloc_state" to "off", "kvmalloc_why" to "", "kvmalloc_seen" to "", "kvmalloc_changed" to "",
             "reserve" to "1", "reserve_state" to "on", "reserve_now" to "300", "reserve_stock" to "73",
             "keep_why" to "", "mem_total_kb" to "11351040",
             "ui" to "1", "ui_state" to "on", "ui_kb" to "861184", "ui_min_kb" to "798720",
@@ -155,7 +155,7 @@ class ScreenshotTest {
     @Config(qualifiers = "zh-rCN-w412dp-h1000dp-night-xhdpi")
     fun freshInstallChinese() = shoot("fresh_install_zh", ready(*fresh))
 
-    private val hooked = arrayOf("kvmalloc" to "1", "kvmalloc_state" to "on", "kvmalloc_seen" to "1300", "kvmalloc_sent" to "1234")
+    private val hooked = arrayOf("kvmalloc" to "1", "kvmalloc_state" to "on", "kvmalloc_seen" to "1300", "kvmalloc_changed" to "1234")
 
     /** Both switches of the tile on: the second one counts what it has done. */
     @Test
