@@ -656,32 +656,18 @@ ctl watch keep
 expect "again after four seconds" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
 expect "two of the four steps done" "$(cat "$RUN/floor.step")" "2"
 # a look that comes late does the steps it missed in one
-echo 950000000 >"$CG/dejank-ui/memory.current"
+echo 800000000 >"$CG/dejank-ui/memory.current"
 echo "1070.00 900.00" >"$PROC/uptime"
 ctl watch keep
-expect "16 and 64 s in one look" "$(cat "$CG/dejank-ui/memory.min")" "747000K"
+expect "16 and 64 s in one look" "$(cat "$CG/dejank-ui/memory.min")" "615150K"
 expect "the first minute is over" "$(cat "$RUN/floor.step")" "4"
 echo 900000000 >"$CG/dejank-ui/memory.current"
 echo "1200.00 900.00" >"$PROC/uptime"
 ctl watch keep
-expect "left alone for half an hour" "$(cat "$CG/dejank-ui/memory.min")" "747000K"
-# what the process holds has shrunk: the kernel took what lay above the floor
-echo 600000000 >"$CG/dejank-ui/memory.current"
+expect "left alone for half an hour" "$(cat "$CG/dejank-ui/memory.min")" "615150K"
 echo "2900.00 900.00" >"$PROC/uptime"
 ctl watch keep
-expect "the floor does not follow its process down" "$(cat "$CG/dejank-ui/memory.min")" "747000K"
-expect "the process it was worked out for is noted" "$(cat "$RUN/of.ui")" "101"
-# another process of that name: what the one before held says nothing about it
-app com.android.systemui 150 280000
-ctl watch keep
-echo "4700.00 900.00" >"$PROC/uptime"
-ctl watch keep
-expect "a new process starts from what it holds" "$(cat "$CG/dejank-ui/memory.min")" "439380K"
-expect "and is the one noted" "$(cat "$RUN/of.ui")" "150"
-echo 900000000 >"$CG/dejank-ui/memory.current"
-echo "6500.00 900.00" >"$PROC/uptime"
-ctl watch keep
-expect "and its floor goes up with it" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
+expect "then worked out again" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
 
 # a switch starts the watcher anew, and with it the count for all floors
 expect "the home app on" "$(ctl set home 1)" "ok=1"
@@ -689,12 +675,12 @@ called "the default home app is restarted into its own group" "kill 200"
 expect "it is in its group" "$(cat "$CG/dejank-home/cgroup.procs")" "201"
 expect "the home app is remembered" "$(cat "$DATA/home")" "com.example.home"
 has "it is named" "$(ctl status)" "home_app=com.example.home"
-expect "counted from now" "$(cat "$RUN/floor.start")" "6500"
+expect "counted from now" "$(cat "$RUN/floor.start")" "2900"
 expect "System UI keeps its floor meanwhile" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
 expect "the home app has none yet" "$(cat "$CG/dejank-home/memory.min")" "0"
 # all floors together hold a tenth of the RAM at most: 1135100 kB here.
 # 703080 + 577080 is more, so both shrink to 88 percent
-echo "6501.00 900.00" >"$PROC/uptime"
+echo "2901.00 900.00" >"$PROC/uptime"
 ctl watch keep
 expect "over the cap, System UI shrinks" "$(cat "$CG/dejank-ui/memory.min")" "618640K"
 expect "and the home app by the same factor" "$(cat "$CG/dejank-home/memory.min")" "507760K"
@@ -711,11 +697,11 @@ expect "its group keeps the floor until the floors are next worked out" "$(cat "
 "$T/bin/gone" 300
 rm -f "$T/pids/com.example.home"
 echo 400000000 >"$CG/dejank-home/memory.current"
-echo "6504.00 900.00" >"$PROC/uptime"
+echo "2904.00 900.00" >"$PROC/uptime"
 ctl watch keep
 expect "the floors were worked out" "$(cat "$RUN/floor.step")" "2"
 expect "the empty group was not measured" "$(cat "$CG/dejank-home/memory.min")" "507760K"
-app com.example.home 310 650400
+app com.example.home 310 290400
 ctl watch keep
 has "the home app is back in its group" "$(ctl status)" "home_state=on"
 
@@ -731,7 +717,7 @@ expect "the controller stays while a group is left" "$(cat "$CG/cgroup.subtree_c
 [ -f "$RUN/watch.token" ] && ok || bad "the watcher is stopped although a switch is on"
 expect "the home app off" "$(ctl set home 0)" "ok=1"
 # (the files here are plain ones: a process that moved twice is listed twice)
-expect "back where it came from, or to the root when that is gone" "$(sort -u "$CG/cgroup.procs" | tr '\n' ' ')" "150 310 "
+expect "back where it came from, or to the root when that is gone" "$(sort -u "$CG/cgroup.procs" | tr '\n' ' ')" "101 310 "
 expect "the controller is switched off again" "$(cat "$CG/cgroup.subtree_control")" "-memory"
 [ ! -e "$RUN/watch.token" ] && ok || bad "the watcher is left running"
 logged "off is logged" "keep home: off"
@@ -831,8 +817,11 @@ echo 70 >"$CG/dejank-composer/cgroup.procs" && echo "/system/uid_1000/pid_70" >"
 : >"$CG/system/uid_1000/pid_60/cgroup.procs"
 : >"$CG/system/uid_1000/pid_70/cgroup.procs"
 echo "KEEP_SF=1" >>"$DATA/conf"
+# one build noted the process each floor was worked out for
+echo 101 >"$RUN/of.ui"
 ctl takeover
 sleep 0.3
+[ ! -e "$RUN/of.ui" ] && ok || bad "an update left the note of a build that let floors only go up"
 [ ! -d "$CG/dejank-sf" ] && [ ! -d "$CG/dejank-composer" ] && ok || bad "an update left the groups of switches that are gone"
 expect "SurfaceFlinger is back where it came from" "$(cat "$CG/system/uid_1000/pid_60/cgroup.procs")" "60"
 expect "the composer service too" "$(cat "$CG/system/uid_1000/pid_70/cgroup.procs")" "70"

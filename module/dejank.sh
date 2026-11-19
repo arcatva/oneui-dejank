@@ -34,8 +34,6 @@
 #   - all floors are worked out together, 1, 4, 16 and 64 s after the start and
 #     every half hour after that; the start is the watcher's, as it is the
 #     service's after boot there
-#   - one thing is not Android's: a floor only goes up while its process lives
-#     (see floor)
 #   - together they hold at most a tenth of the RAM; when they would hold more,
 #     every floor shrinks by the same factor
 #   - swap is left as the system has it
@@ -718,10 +716,12 @@ grp_drop() {
 # had one for system_server. Whatever is still in them goes back.
 legacy_drop() {
     rm -f "$RUN/watch.pin" "$RUN/watch.sys"
+    # the note one build kept of the process a floor was worked out for
+    rm -f "$RUN/of.ui" "$RUN/of.home" "$RUN/of.server"
     grp_drop "$CG/dejank"
     grp_drop "$CG/dejank-sys"
     for l_d in $RETIRED; do
-        rm -f "$RUN/watch.$l_d" "$RUN/raw.$l_d" "$RUN/of.$l_d" "$RUN/since.$l_d" "$RUN/floored.$l_d"
+        rm -f "$RUN/watch.$l_d" "$RUN/raw.$l_d" "$RUN/since.$l_d" "$RUN/floored.$l_d"
         grp_drop "$CG/dejank-$l_d"
     done
 }
@@ -822,30 +822,19 @@ unmapped() {
 
 # The floor of key $1 before the cap: nine tenths of what its group holds once
 # the unmapped file cache is taken off. Kept in KiB for floors_write.
-# It does not follow its process down. What a process holds shrinks while it
-# waits in the background, because the kernel takes what lies above the floor;
-# a floor worked out then would be the smaller for it, and the part the
-# process grows back on its return would have no floor at all. So the highest
-# figure stands for as long as the same process is in the group.
+# It follows its process down as well as up, as Android's does. One build let
+# the highest figure stand while the process lived: a moment's peak then stood
+# for weeks, took the room under the cap from the others, and came to shield
+# the very file cache the rule leaves out.
 floor() {
     grp "$1"
-    first "$G/cgroup.procs"
-    f_pid=$VAL
     first "$G/memory.current"
     kib "$VAL" || return 1
     f_cur=$KIB
     unmapped "$G"
     f_keep=$((f_cur - UNMAPPED))
     [ "$f_keep" -gt 0 ] || f_keep=0
-    f_new=$((f_keep / 100 * FLOOR_PCT))
-    first "$RUN/of.$1"
-    f_of=$VAL
-    first "$RUN/raw.$1"
-    if [ -n "$f_pid" ] && [ "$f_of" = "$f_pid" ] && is_num "$VAL" && [ "$VAL" -gt "$f_new" ]; then
-        f_new=$VAL
-    fi
-    echo "$f_pid" >"$RUN/of.$1"
-    echo "$f_new" >"$RUN/raw.$1"
+    echo $((f_keep / 100 * FLOOR_PCT)) >"$RUN/raw.$1"
 }
 
 # Writes the floors of all groups. Together they may hold a tenth of the RAM;
@@ -1029,7 +1018,7 @@ keep_on() {
 
 # The floors that stay may grow back to their full size.
 keep_off() {
-    rm -f "$RUN/watch.$1" "$RUN/raw.$1" "$RUN/of.$1" "$RUN/since.$1" "$RUN/floored.$1"
+    rm -f "$RUN/watch.$1" "$RUN/raw.$1" "$RUN/since.$1" "$RUN/floored.$1"
     any_mark || rm -f "$RUN/watch.token"
     grp "$1"
     [ -d "$G" ] && log "keep $1: off"
