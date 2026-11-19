@@ -41,10 +41,11 @@ class ScreenshotTest {
 
     private fun status(vararg change: Pair<String, String>): Status {
         val map = linkedMapOf(
-            "api" to "5", "version" to "v0.2.0", "build" to "4", "paused" to "0",
+            "api" to "6", "version" to "v0.2.0", "build" to "4", "paused" to "0",
             "gpu" to "1", "gpu_state" to "on", "gpu_why" to "", "gpu_was" to "2",
             "kvmalloc" to "0", "kvmalloc_state" to "off", "kvmalloc_why" to "", "kvmalloc_seen" to "", "kvmalloc_changed" to "",
             "reserve" to "1", "reserve_state" to "on", "reserve_now" to "300", "reserve_stock" to "73",
+            "shaderc" to "0", "shaderc_state" to "off", "shaderc_why" to "", "shaderc_kb" to "",
             "keep_why" to "", "mem_total_kb" to "11351040", "keep_cap_kb" to "1135100",
             "ui" to "1", "ui_state" to "on", "ui_kb" to "286720", "ui_min_kb" to "137216",
             "home" to "1", "home_state" to "on", "home_kb" to "188416", "home_min_kb" to "124928",
@@ -63,6 +64,7 @@ class ScreenshotTest {
     /** Everything in the chain switched on, the way a phone looks a while after that. */
     private val all = arrayOf(
         "server" to "1", "server_state" to "on", "server_kb" to "231424", "server_min_kb" to "150528",
+        "shaderc" to "1", "shaderc_state" to "on", "shaderc_kb" to "23120",
     )
 
     private fun shoot(

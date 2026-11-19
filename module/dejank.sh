@@ -14,6 +14,8 @@
 #          as from Linux 6.16; off unless switched on
 # reserve  vm.watermark_scale_factor = 300: memory is freed in the background
 #          earlier, so apps rarely have to wait for it
+# shaderc  keeps the Adreno driver's shader compiler in RAM; off unless
+#          switched on
 #
 # Kept in RAM, one switch and one memory group per process:
 #   ui home   System UI and the home app; on by default, restarted once into
@@ -32,6 +34,8 @@
 #   - all floors are worked out together, 1, 4, 16 and 64 s after the start and
 #     every half hour after that; the start is the watcher's, as it is the
 #     service's after boot there
+#   - one thing is not Android's: a floor only goes up while its process lives
+#     (see floor)
 #   - together they hold at most a tenth of the RAM; when they would hold more,
 #     every floor shrinks by the same factor
 #   - swap is left as the system has it
@@ -78,6 +82,9 @@ KV_TRY=$DATA/kvmalloc.trying   # the boot and second the hook was switched on in
 KV_TRIP=$DATA/kvmalloc.tripped # the phone went down before that
 KV_HOLD=${KV_HOLD:-3}
 RESERVE_TARGET=300
+SC_FILES=${SC_FILES:-/vendor/lib64/libllvm-qgl.so}
+SC_BIN=$MODDIR/bin/hold
+SC_PID=$RUN/shaderc.pid
 SYSTEMUI=com.android.systemui
 HOME_FALLBACK=com.sec.android.app.launcher
 
@@ -99,6 +106,7 @@ load_conf() {
     GPU=1
     KV=0
     RESERVE=1
+    SC=0
     K_ui=1
     K_home=1
     K_server=0
@@ -112,6 +120,7 @@ load_conf() {
         GPU) GPU=$v ;;
         KVMALLOC) KV=$v ;;
         RESERVE) RESERVE=$v ;;
+        SHADERC) SC=$v ;;
         KEEP_UI) K_ui=$v && c_new=1 ;;
         KEEP_HOME) K_home=$v && c_new=1 ;;
         KEEP_SERVER) K_server=$v && c_new=1 ;;
@@ -128,8 +137,8 @@ load_conf() {
 }
 
 save_conf() {
-    printf 'GPU=%s\nKVMALLOC=%s\nRESERVE=%s\nKEEP_UI=%s\nKEEP_HOME=%s\nKEEP_SERVER=%s\n' \
-        "$GPU" "$KV" "$RESERVE" "$K_ui" "$K_home" "$K_server" >"$CONF.tmp" && mv "$CONF.tmp" "$CONF"
+    printf 'GPU=%s\nKVMALLOC=%s\nRESERVE=%s\nSHADERC=%s\nKEEP_UI=%s\nKEEP_HOME=%s\nKEEP_SERVER=%s\n' \
+        "$GPU" "$KV" "$RESERVE" "$SC" "$K_ui" "$K_home" "$K_server" >"$CONF.tmp" && mv "$CONF.tmp" "$CONF"
 }
 
 # wanted <key>: is this switch on in the settings?
@@ -438,6 +447,104 @@ reserve_off() {
     log "reserve: off, back to $stock"
 }
 
+# ------------------------------------------------------------- shaderc
+
+# The first time an app draws in a way it has not drawn before, the Adreno
+# driver compiles a shader for it, in the middle of a frame, with the code in
+# libllvm-qgl.so. Nothing else runs that code, so the kernel drops the file
+# from RAM, and the compile then stops for flash again and again: 10 to 112 ms
+# of a frame in the traces this was found in, on top of the compile itself.
+# The file is kept in RAM the way Android's PinnerService keeps the files on
+# its list, mapped and locked, by a small program that stays (native/hold.c).
+# Pixel 5 has two libraries of the same driver on that list for the same
+# reason; Samsung's list is empty.
+
+# Whether the program that holds the file is there.
+sc_runs() {
+    first "$SC_PID"
+    is_num "$VAL" || return 1
+    grep -q 'bin/hold' "$PROC/$VAL/cmdline" 2>/dev/null
+}
+
+# SC_STATE: on, off, err or na. SC_WHY:
+#   file   this phone has no such library: another GPU, or another driver
+#   build  this build of the module came without the program
+#   start  the program did not get to hold the file
+# SC_KB: what is held, in kB
+sc_state() {
+    SC_WHY=
+    SC_KB=
+    SCF=
+    for s_f in $SC_FILES; do
+        [ -f "$s_f" ] && SCF="$SCF $s_f"
+    done
+    if sc_runs; then
+        SC_STATE=on
+        while read -r s_k s_v _; do
+            [ "$s_k" = VmLck: ] && SC_KB=$s_v && break
+        done 2>/dev/null <"$PROC/$VAL/status"
+        is_num "$SC_KB" || SC_KB=
+        return 0
+    fi
+    if [ -z "$SCF" ]; then
+        SC_STATE=na
+        SC_WHY=file
+    elif [ ! -f "$SC_BIN" ]; then
+        SC_STATE=na
+        SC_WHY=build
+    elif [ -f "$RUN/shaderc.err" ]; then
+        SC_STATE=err
+        SC_WHY=start
+    else
+        SC_STATE=off
+    fi
+}
+
+# The program returns once the file is held, or with what went wrong.
+sc_on() {
+    rm -f "$RUN/shaderc.err"
+    sc_state
+    [ "$SC_STATE" = na ] && return 1
+    if [ "$SC_STATE" != on ]; then
+        rm -f "$SC_PID"
+        chmod 755 "$SC_BIN" 2>/dev/null
+        # shellcheck disable=SC2086
+        out=$("$SC_BIN" "$SC_PID" $SCF 2>&1 </dev/null)
+        if ! sc_runs; then
+            rm -f "$SC_PID" "$RUN/shaderc.on"
+            : >"$RUN/shaderc.err"
+            log "shaderc: not held: ${out:-the program did not stay}"
+            return 1
+        fi
+        # started by a shell of the app, it would be frozen and killed with it
+        free_pid "$VAL"
+        sc_state
+        log "shaderc: on, ${SC_KB:-?} kB held"
+    fi
+    : >"$RUN/shaderc.on"
+    return 0
+}
+
+sc_off() {
+    rm -f "$RUN/shaderc.err" "$RUN/shaderc.on"
+    if sc_runs; then
+        $KILL -9 "$VAL" 2>/dev/null
+        log "shaderc: off"
+    fi
+    rm -f "$SC_PID"
+    return 0
+}
+
+# A program that is gone is started again by whoever looks next, as the
+# watcher is. One that did not get to hold the file is not tried again.
+sc_revive() {
+    [ -f "$RUN/shaderc.on" ] && [ ! -f "$PAUSE" ] && [ "$REVIVE" = 1 ] || return 0
+    sc_runs && return 0
+    log "shaderc: the program was gone, started again"
+    sc_on
+    return 0
+}
+
 # ---------------------------------------------------------------- keep
 
 # KIB: a byte count in KiB. The shell on Android counts in 32 bits, so the
@@ -614,7 +721,7 @@ legacy_drop() {
     grp_drop "$CG/dejank"
     grp_drop "$CG/dejank-sys"
     for l_d in $RETIRED; do
-        rm -f "$RUN/watch.$l_d" "$RUN/raw.$l_d" "$RUN/since.$l_d" "$RUN/floored.$l_d"
+        rm -f "$RUN/watch.$l_d" "$RUN/raw.$l_d" "$RUN/of.$l_d" "$RUN/since.$l_d" "$RUN/floored.$l_d"
         grp_drop "$CG/dejank-$l_d"
     done
 }
@@ -715,15 +822,30 @@ unmapped() {
 
 # The floor of key $1 before the cap: nine tenths of what its group holds once
 # the unmapped file cache is taken off. Kept in KiB for floors_write.
+# It does not follow its process down. What a process holds shrinks while it
+# waits in the background, because the kernel takes what lies above the floor;
+# a floor worked out then would be the smaller for it, and the part the
+# process grows back on its return would have no floor at all. So the highest
+# figure stands for as long as the same process is in the group.
 floor() {
     grp "$1"
+    first "$G/cgroup.procs"
+    f_pid=$VAL
     first "$G/memory.current"
     kib "$VAL" || return 1
     f_cur=$KIB
     unmapped "$G"
     f_keep=$((f_cur - UNMAPPED))
     [ "$f_keep" -gt 0 ] || f_keep=0
-    echo $((f_keep / 100 * FLOOR_PCT)) >"$RUN/raw.$1"
+    f_new=$((f_keep / 100 * FLOOR_PCT))
+    first "$RUN/of.$1"
+    f_of=$VAL
+    first "$RUN/raw.$1"
+    if [ -n "$f_pid" ] && [ "$f_of" = "$f_pid" ] && is_num "$VAL" && [ "$VAL" -gt "$f_new" ]; then
+        f_new=$VAL
+    fi
+    echo "$f_pid" >"$RUN/of.$1"
+    echo "$f_new" >"$RUN/raw.$1"
 }
 
 # Writes the floors of all groups. Together they may hold a tenth of the RAM;
@@ -819,23 +941,28 @@ watch_start() {
 }
 
 # A root shell that an app starts sits in that app's cgroup: Android freezes
-# the group when the app leaves the screen and kills it with the app. So the
-# watcher goes to the top of each hierarchy, where a daemon lives.
-watch_free() {
+# the group when the app leaves the screen and kills it with the app. So
+# whatever is to stay goes to the top of each hierarchy, where a daemon lives.
+# free_pid <pid>
+free_pid() {
     for w_cg in $FREE; do
-        [ -f "$w_cg/cgroup.procs" ] && echo $$ >>"$w_cg/cgroup.procs" 2>/dev/null
+        [ -f "$w_cg/cgroup.procs" ] && echo "$1" >>"$w_cg/cgroup.procs" 2>/dev/null
     done
     # it has the CPU share of the app that started it, the one on the screen:
     # the background's is its own, or failing that nobody's
     for w_cg in $BACK; do
         if [ -f "$w_cg/system-background/cgroup.procs" ]; then
-            echo $$ >>"$w_cg/system-background/cgroup.procs" 2>/dev/null
+            echo "$1" >>"$w_cg/system-background/cgroup.procs" 2>/dev/null
         elif [ -f "$w_cg/cgroup.procs" ]; then
-            echo $$ >>"$w_cg/cgroup.procs" 2>/dev/null
+            echo "$1" >>"$w_cg/cgroup.procs" 2>/dev/null
         fi
     done
-    [ -f "$PROC/$$/oom_score_adj" ] && echo -1000 >"$PROC/$$/oom_score_adj" 2>/dev/null
+    [ -f "$PROC/$1/oom_score_adj" ] && echo -1000 >"$PROC/$1/oom_score_adj" 2>/dev/null
     return 0
+}
+
+watch_free() {
+    free_pid $$
 }
 
 # Whether the watcher that holds the token is still there.
@@ -902,7 +1029,7 @@ keep_on() {
 
 # The floors that stay may grow back to their full size.
 keep_off() {
-    rm -f "$RUN/watch.$1" "$RUN/raw.$1" "$RUN/since.$1" "$RUN/floored.$1"
+    rm -f "$RUN/watch.$1" "$RUN/raw.$1" "$RUN/of.$1" "$RUN/since.$1" "$RUN/floored.$1"
     any_mark || rm -f "$RUN/watch.token"
     grp "$1"
     [ -d "$G" ] && log "keep $1: off"
@@ -1089,6 +1216,7 @@ apply() {
     if [ "$GPU" = 1 ]; then gpu_on; fi
     if [ "$KV" = 1 ]; then kv_on; fi
     if [ "$RESERVE" = 1 ]; then reserve_on; fi
+    if [ "$SC" = 1 ]; then sc_on; fi
     [ "$1" = boot ] && return 0
     official_check
     [ -n "$OFFICIAL" ] || official_known
@@ -1110,6 +1238,8 @@ status() {
     load_conf
     kv_guard
     watch_revive
+    sc_revive
+    sc_state
     gpu_state
     kv_state
     reserve_state
@@ -1119,7 +1249,7 @@ status() {
     [ "$OFFICIAL" = 1 ] && KEEP_WHY=official
     paused=0
     [ -f "$PAUSE" ] && paused=1
-    echo "api=5"
+    echo "api=6"
     echo "version=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)"
     echo "build=$(sed -n 's/^versionCode=//p' "$MODDIR/module.prop" 2>/dev/null)"
     echo "paused=$paused"
@@ -1138,6 +1268,10 @@ status() {
     echo "reserve_state=$RES_STATE"
     echo "reserve_now=$RES_NOW"
     echo "reserve_stock=$RES_STOCK"
+    echo "shaderc=$SC"
+    echo "shaderc_state=$SC_STATE"
+    echo "shaderc_why=$SC_WHY"
+    echo "shaderc_kb=$SC_KB"
     echo "keep_why=$KEEP_WHY"
     mem_total
     echo "mem_total_kb=$MEMKB"
@@ -1167,6 +1301,7 @@ set)
     gpu) GPU=$3 && fn=gpu ;;
     kvmalloc) KV=$3 && fn=kv ;;
     reserve) RESERVE=$3 && fn=reserve ;;
+    shaderc) SC=$3 && fn=sc ;;
     ui | home | server) eval "K_$2=\$3" && fn="keep" ;;
     *) echo "error=name" && exit 1 ;;
     esac
@@ -1208,7 +1343,7 @@ guard)
 settled) rm -f "$GUARD" ;;
 log) tail -n "${2:-50}" "$LOG" 2>/dev/null ;;
 *)
-    echo "usage: dejank.sh status | set <gpu|kvmalloc|reserve|ui|home|server> <0|1> | apply | resume | log [lines]"
+    echo "usage: dejank.sh status | set <gpu|kvmalloc|reserve|shaderc|ui|home|server> <0|1> | apply | resume | log [lines]"
     exit 1
     ;;
 esac

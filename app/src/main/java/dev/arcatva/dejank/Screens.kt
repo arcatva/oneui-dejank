@@ -266,7 +266,7 @@ private fun ColumnScope.Home(
             onClick = { onOpen(Tile.KEEP) },
             modifier = Modifier.fillMaxWidth(),
         ) {
-            if (status.on(Tile.KEEP)) KeptBar(status)
+            if (status.keptCount > 0) KeptBar(status)
         }
     }
 
@@ -448,6 +448,34 @@ private fun ColumnScope.KeepDetail(status: Status, busy: Boolean, ask: (() -> Un
     }
     KeepGroup(stringResource(R.string.keep_apps), Keep.entries.filter { it.restarts }, status, busy, ask, actions)
     KeepGroup(stringResource(R.string.keep_system), Keep.entries.filter { !it.restarts }, status, busy, ask, actions)
+    Section(stringResource(R.string.keep_gpu)) {
+        val fix = Fix.SHADERC
+        val usable = status.state(fix) != FixState.NA
+        SwitchRow(
+            title = stringResource(fix.switch),
+            summary = stringResource(R.string.shaderc_role),
+            value = status.shadercValue()?.text(),
+            valueColor = status.tone(fix).color(),
+            checked = usable && status.wanted(fix),
+            enabled = usable && !busy,
+            onToggle = { actions.set(fix.key, it) },
+            shape = segment(0, 1),
+        )
+    }
+}
+
+/** A named stack of switches. */
+@Composable
+private fun Section(title: String, rows: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            title,
+            Modifier.padding(horizontal = 8.dp),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp), content = rows)
+    }
 }
 
 @Composable
@@ -459,30 +487,22 @@ private fun KeepGroup(
     ask: (() -> Unit) -> Unit,
     actions: Actions,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            title,
-            Modifier.padding(horizontal = 8.dp),
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            keeps.forEachIndexed { i, keep ->
-                val kept = status.kept(keep)
-                val usable = kept.state != KeepState.NA && kept.state != KeepState.NONE
-                SwitchRow(
-                    title = stringResource(keep.title),
-                    summary = stringResource(keep.role),
-                    value = status.value(keep)?.text(),
-                    valueColor = status.tone(keep).color(),
-                    checked = usable && kept.wanted,
-                    enabled = usable && !busy,
-                    onToggle = { on ->
-                        if (on && keep.restarts) ask { actions.set(keep.key, true) } else actions.set(keep.key, on)
-                    },
-                    shape = segment(i, keeps.size),
-                )
-            }
+    Section(title) {
+        keeps.forEachIndexed { i, keep ->
+            val kept = status.kept(keep)
+            val usable = kept.state != KeepState.NA && kept.state != KeepState.NONE
+            SwitchRow(
+                title = stringResource(keep.title),
+                summary = stringResource(keep.role),
+                value = status.value(keep)?.text(),
+                valueColor = status.tone(keep).color(),
+                checked = usable && kept.wanted,
+                enabled = usable && !busy,
+                onToggle = { on ->
+                    if (on && keep.restarts) ask { actions.set(keep.key, true) } else actions.set(keep.key, on)
+                },
+                shape = segment(i, keeps.size),
+            )
         }
     }
 }

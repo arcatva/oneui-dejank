@@ -54,6 +54,9 @@
     <string name="keep_home_role">Home screen and recents</string>
     <string name="keep_server" translatable="false">system_server</string>
     <string name="keep_server_role">Window management and input</string>
+    <string name="keep_gpu">GPU driver</string>
+    <string name="shaderc_title">Shader compiler</string>
+    <string name="shaderc_role" translatable="false">libllvm-qgl.so</string>
     <string name="kept_wait">Waiting</string>
     <string name="kept_none">Not found</string>
 

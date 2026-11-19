@@ -9,6 +9,8 @@ trap 'rm -rf "$T"' EXIT
 
 export DATA=$T/data RUN=$T/run PROC=$T/proc VM=$T/vm SYSMOD=$T/sysmod CG=$T/cg
 export RMDIR="rm -rf" KILL=$T/bin/kill9 NAP=0 WATCH_FAST=0 WATCH_ROUNDS=2 WATCH_ONCE=1 BOOT_RECLAIM_AFTER=0 KV_HOLD=0 FREE= BACK= REVIVE=0 T
+export SC_FILES=$T/vendor/libllvm-qgl.so
+LIB=$SC_FILES
 KO=$T/mod/kmod/kgsl_nowait-android16-6.12.ko
 KVKO=$T/mod/kmod/kvmalloc_nowait-android16-6.12.ko
 HOOK="ffffffc008123450 T __traceiter_android_vh_adjust_kvmalloc_flags"
@@ -21,11 +23,27 @@ phone() {
         sleep 0.5
         rm -rf "$T/mod" "$DATA" "$RUN" "$PROC" "$VM" "$SYSMOD" "$CG" "$T/bin" "$T/pids" "$T/calls"
     }
-    rm -f "$T/dumpsys.out" "$T/insmod.fail"
-    mkdir -p "$T/mod/kmod" "$PROC/sys/kernel/random" "$VM" "$SYSMOD/msm_kgsl" "$CG/apps/uid_10056/pid_100" "$T/bin" "$T/pids"
+    rm -rf "$T/vendor"
+    rm -f "$T/dumpsys.out" "$T/insmod.fail" "$T/hold.fail"
+    mkdir -p "$T/mod/bin" "$T/vendor" "$T/mod/kmod" "$PROC/sys/kernel/random" "$VM" "$SYSMOD/msm_kgsl" "$CG/apps/uid_10056/pid_100" "$T/bin" "$T/pids"
     cp "$SRC"/*.sh "$SRC"/module.prop "$T/mod/"
     : >"$KO"
     : >"$KVKO"
+    : >"$LIB"
+    # the program that holds a file: here it leaves a process behind that is none
+    cat >"$T/mod/bin/hold" <<'HOLD'
+#!/bin/sh
+echo "hold $*" >>"$T/calls"
+if [ -f "$T/hold.fail" ]; then
+    echo "hold: $2: mlock: Cannot allocate memory" >&2
+    exit 1
+fi
+/bin/mkdir -p "$PROC/4242"
+echo "$0" >"$PROC/4242/cmdline"
+printf '%s\n' "Name:	hold" "VmLck:	   23120 kB" >"$PROC/4242/status"
+echo 4242 >"$1"
+HOLD
+    chmod +x "$T/mod/bin/hold"
     : >"$T/calls"
     echo "6.12.58-android16-6-abc-4k" >"$T/uname"
     echo 2 >"$T/kgsl.value"
@@ -184,7 +202,7 @@ logged() { if grep -q -- "$2" "$DATA/log" 2>/dev/null; then ok; else bad "$1 -> 
 # ---------------------------------------------------------- a fresh phone
 phone
 S=$(ctl status)
-has "api" "$S" "api=5"
+has "api" "$S" "api=6"
 has "version" "$S" "version=$(sed -n 's/^version=//p' "$SRC/module.prop")"
 has "build" "$S" "build=$(sed -n 's/^versionCode=//p' "$SRC/module.prop")"
 has "everything is wanted by default" "$S" "gpu=1"
@@ -500,6 +518,84 @@ rm "$VM/watermark_scale_factor"
 has "no such setting" "$(ctl status)" "reserve_state=na"
 expect "cannot be switched on" "$(ctl set reserve 1)" "error=failed"
 
+# ---------------------------------------------------------- the shader compiler
+phone
+S=$(ctl status)
+has "the shader compiler is not wanted by default" "$S" "shaderc=0"
+has "and is off" "$S" "shaderc_state=off"
+has "nothing is held" "$S" "shaderc_kb="
+expect "on" "$(ctl set shaderc 1)" "ok=1"
+called "the program gets its pid file and the library" "hold $RUN/shaderc.pid $LIB"
+S=$(ctl status)
+has "it is on" "$S" "shaderc_state=on"
+has "what is held" "$S" "shaderc_kb=23120"
+has "the switch is remembered" "$S" "shaderc=1"
+expect "the switch is saved" "$(grep '^SHADERC=' "$DATA/conf")" "SHADERC=1"
+logged "on is logged with what is held" "shaderc: on, 23120 kB held"
+: >"$T/calls"
+expect "on again" "$(ctl set shaderc 1)" "ok=1"
+not_called "what is held is not held twice" "hold"
+
+# the program is gone
+rm -rf "$PROC/4242"
+has "gone, it shows as off" "$(ctl status)" "shaderc_state=off"
+not_called "a look that may not start anything starts nothing" "hold"
+S=$(REVIVE=1 ctl status)
+called "whoever looks next starts it again" "hold $RUN/shaderc.pid $LIB"
+has "and it is on again" "$S" "shaderc_state=on"
+logged "that is logged" "shaderc: the program was gone, started again"
+
+expect "off" "$(ctl set shaderc 0)" "ok=1"
+called "the program is ended" "kill 4242"
+has "it is off" "$(ctl status)" "shaderc_state=off"
+[ ! -e "$RUN/shaderc.pid" ] && ok || bad "the pid file is left"
+expect "off is saved" "$(grep '^SHADERC=' "$DATA/conf")" "SHADERC=0"
+logged "off is logged" "shaderc: off"
+rm -rf "$PROC/4242"
+: >"$T/calls"
+REVIVE=1 ctl status >/dev/null
+not_called "one that was switched off is not started again" "hold"
+
+# it does not get to hold the file
+phone
+: >"$T/hold.fail"
+expect "cannot be switched on" "$(ctl set shaderc 1)" "error=failed"
+S=$(ctl status)
+has "an error" "$S" "shaderc_state=err"
+has "says why" "$S" "shaderc_why=start"
+logged "with what the program said" "shaderc: not held: hold: .*mlock: Cannot allocate memory"
+: >"$T/calls"
+REVIVE=1 ctl status >/dev/null
+not_called "a look does not try again" "hold"
+rm -f "$T/hold.fail"
+expect "a new try works" "$(ctl set shaderc 1)" "ok=1"
+has "and the error is gone" "$(ctl status)" "shaderc_state=on"
+
+# a phone without that library, and a build without the program
+phone
+rm -f "$LIB"
+S=$(ctl status)
+has "no such library" "$S" "shaderc_state=na"
+has "says why" "$S" "shaderc_why=file"
+expect "cannot be switched on" "$(ctl set shaderc 1)" "error=failed"
+not_called "nothing is started" "hold"
+phone
+rm -f "$T/mod/bin/hold"
+S=$(ctl status)
+has "no program in this build" "$S" "shaderc_state=na"
+has "says why" "$S" "shaderc_why=build"
+
+# apply holds it when the switch is on
+phone
+mkdir -p "$DATA"
+echo "SHADERC=1" >"$DATA/conf"
+ctl apply >/dev/null
+called "apply holds the library" "hold $RUN/shaderc.pid $LIB"
+has "and it is on" "$(ctl status)" "shaderc_state=on"
+phone
+ctl apply >/dev/null
+not_called "and leaves it alone when the switch is off" "hold"
+
 # ---------------------------------------------------------- kept in RAM
 phone
 echo "cpu io" >"$CG/cgroup.controllers"
@@ -560,18 +656,32 @@ ctl watch keep
 expect "again after four seconds" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
 expect "two of the four steps done" "$(cat "$RUN/floor.step")" "2"
 # a look that comes late does the steps it missed in one
-echo 800000000 >"$CG/dejank-ui/memory.current"
+echo 950000000 >"$CG/dejank-ui/memory.current"
 echo "1070.00 900.00" >"$PROC/uptime"
 ctl watch keep
-expect "16 and 64 s in one look" "$(cat "$CG/dejank-ui/memory.min")" "615150K"
+expect "16 and 64 s in one look" "$(cat "$CG/dejank-ui/memory.min")" "747000K"
 expect "the first minute is over" "$(cat "$RUN/floor.step")" "4"
 echo 900000000 >"$CG/dejank-ui/memory.current"
 echo "1200.00 900.00" >"$PROC/uptime"
 ctl watch keep
-expect "left alone for half an hour" "$(cat "$CG/dejank-ui/memory.min")" "615150K"
+expect "left alone for half an hour" "$(cat "$CG/dejank-ui/memory.min")" "747000K"
+# what the process holds has shrunk: the kernel took what lay above the floor
+echo 600000000 >"$CG/dejank-ui/memory.current"
 echo "2900.00 900.00" >"$PROC/uptime"
 ctl watch keep
-expect "then worked out again" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
+expect "the floor does not follow its process down" "$(cat "$CG/dejank-ui/memory.min")" "747000K"
+expect "the process it was worked out for is noted" "$(cat "$RUN/of.ui")" "101"
+# another process of that name: what the one before held says nothing about it
+app com.android.systemui 150 280000
+ctl watch keep
+echo "4700.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "a new process starts from what it holds" "$(cat "$CG/dejank-ui/memory.min")" "439380K"
+expect "and is the one noted" "$(cat "$RUN/of.ui")" "150"
+echo 900000000 >"$CG/dejank-ui/memory.current"
+echo "6500.00 900.00" >"$PROC/uptime"
+ctl watch keep
+expect "and its floor goes up with it" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
 
 # a switch starts the watcher anew, and with it the count for all floors
 expect "the home app on" "$(ctl set home 1)" "ok=1"
@@ -579,12 +689,12 @@ called "the default home app is restarted into its own group" "kill 200"
 expect "it is in its group" "$(cat "$CG/dejank-home/cgroup.procs")" "201"
 expect "the home app is remembered" "$(cat "$DATA/home")" "com.example.home"
 has "it is named" "$(ctl status)" "home_app=com.example.home"
-expect "counted from now" "$(cat "$RUN/floor.start")" "2900"
+expect "counted from now" "$(cat "$RUN/floor.start")" "6500"
 expect "System UI keeps its floor meanwhile" "$(cat "$CG/dejank-ui/memory.min")" "703080K"
 expect "the home app has none yet" "$(cat "$CG/dejank-home/memory.min")" "0"
 # all floors together hold a tenth of the RAM at most: 1135100 kB here.
 # 703080 + 577080 is more, so both shrink to 88 percent
-echo "2901.00 900.00" >"$PROC/uptime"
+echo "6501.00 900.00" >"$PROC/uptime"
 ctl watch keep
 expect "over the cap, System UI shrinks" "$(cat "$CG/dejank-ui/memory.min")" "618640K"
 expect "and the home app by the same factor" "$(cat "$CG/dejank-home/memory.min")" "507760K"
@@ -601,11 +711,11 @@ expect "its group keeps the floor until the floors are next worked out" "$(cat "
 "$T/bin/gone" 300
 rm -f "$T/pids/com.example.home"
 echo 400000000 >"$CG/dejank-home/memory.current"
-echo "2904.00 900.00" >"$PROC/uptime"
+echo "6504.00 900.00" >"$PROC/uptime"
 ctl watch keep
 expect "the floors were worked out" "$(cat "$RUN/floor.step")" "2"
 expect "the empty group was not measured" "$(cat "$CG/dejank-home/memory.min")" "507760K"
-app com.example.home 310 290400
+app com.example.home 310 650400
 ctl watch keep
 has "the home app is back in its group" "$(ctl status)" "home_state=on"
 
@@ -621,7 +731,7 @@ expect "the controller stays while a group is left" "$(cat "$CG/cgroup.subtree_c
 [ -f "$RUN/watch.token" ] && ok || bad "the watcher is stopped although a switch is on"
 expect "the home app off" "$(ctl set home 0)" "ok=1"
 # (the files here are plain ones: a process that moved twice is listed twice)
-expect "back where it came from, or to the root when that is gone" "$(sort -u "$CG/cgroup.procs" | tr '\n' ' ')" "101 310 "
+expect "back where it came from, or to the root when that is gone" "$(sort -u "$CG/cgroup.procs" | tr '\n' ' ')" "150 310 "
 expect "the controller is switched off again" "$(cat "$CG/cgroup.subtree_control")" "-memory"
 [ ! -e "$RUN/watch.token" ] && ok || bad "the watcher is left running"
 logged "off is logged" "keep home: off"

@@ -48,6 +48,8 @@
     <string name="keep_home">桌面</string>
     <string name="keep_home_role">主屏幕与最近任务</string>
     <string name="keep_server_role">窗口管理与输入</string>
+    <string name="keep_gpu">GPU 驱动</string>
+    <string name="shaderc_title">着色器编译器</string>
     <string name="kept_wait">等待启动</string>
     <string name="kept_none">未找到</string>
 

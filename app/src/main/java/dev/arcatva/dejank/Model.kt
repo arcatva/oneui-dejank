@@ -3,7 +3,7 @@ package dev.arcatva.dejank
 import java.util.Locale
 
 /** The version of dejank.sh's status output this app understands. */
-const val EXPECTED_API = 5
+const val EXPECTED_API = 6
 
 enum class ThemeChoice(val label: Int) {
     DARK(R.string.theme_dark),
@@ -54,6 +54,9 @@ enum class Fix(val key: String, val switch: Int) {
     GPU("gpu", R.string.gpu_switch),
     KVMALLOC("kvmalloc", R.string.kvmalloc_switch),
     RESERVE("reserve", R.string.reserve_switch),
+
+    /** A file of the GPU driver held in RAM. Its switch is on the page of what is kept. */
+    SHADERC("shaderc", R.string.shaderc_title),
 }
 
 /**
@@ -130,6 +133,10 @@ data class Status(
     val keepWhy: String = "",
     /** The most all floors may come to together. */
     val keepCapKb: Long? = null,
+    /** Why the shader compiler cannot be held: "file" (no such library here), "build", "start", or empty. */
+    val shadercWhy: String = "",
+    /** What is held of it. */
+    val shadercKb: Long? = null,
     val kept: Map<Keep, Kept> = emptyMap(),
 ) {
     fun wanted(fix: Fix): Boolean = wanted[fix] == true
@@ -147,6 +154,8 @@ data class Status(
 
     val anyPending: Boolean get() = !paused && (Fix.entries.any { pending(it) } || keepPending)
 
+    private val shadercOn: Boolean get() = state(Fix.SHADERC) == FixState.ON
+
     /** Applying would restart System UI or the home app. */
     val applyRestarts: Boolean get() = Keep.entries.any { it.restarts && pending(it) }
 
@@ -156,7 +165,7 @@ data class Status(
     val keptCount: Int get() = Keep.entries.count { kept(it).active }
 
     fun on(tile: Tile): Boolean =
-        if (tile == Tile.KEEP) keptCount > 0 else tile.fixes.any { state(it) == FixState.ON }
+        if (tile == Tile.KEEP) keptCount > 0 || shadercOn else tile.fixes.any { state(it) == FixState.ON }
 
     /** A fix of this tile was switched on and the kernel would not have it. */
     private fun failed(tile: Tile): Boolean = tile.fixes.any { wanted(it) && state(it) == FixState.ERR }
@@ -185,7 +194,7 @@ data class Status(
         FixState.OFF -> if (wanted(fix)) lineOf(R.string.not_applied) else null
         FixState.ERR -> lineOf(
             when {
-                fix == Fix.RESERVE -> R.string.failed
+                fix == Fix.RESERVE || fix == Fix.SHADERC -> R.string.failed
                 fix == Fix.KVMALLOC && kvmallocWhy == "reboot" -> R.string.kvmalloc_err_reboot
                 else -> R.string.gpu_err
             },
@@ -202,8 +211,13 @@ data class Status(
                 "hook" -> lineOf(R.string.reserve_na)
                 else -> noBuild()
             }
+            Fix.SHADERC -> lineOf(if (shadercWhy == "file") R.string.kept_none else R.string.not_supported)
         }
     }
+
+    /** Beside the switch of the shader compiler: what is held of it, or why nothing is. */
+    fun shadercValue(): Line? =
+        if (shadercOn) shadercKb?.let { lineOf(R.string.plain, size(it)) } else note(Fix.SHADERC)
 
     /** There is no kernel module for this phone's kernel. */
     private fun noBuild(): Line =
@@ -241,9 +255,11 @@ data class Status(
             else -> short(tile.fixes.first())
         }
         Tile.KEEP -> when {
+            keptCount > 0 -> countOf(R.plurals.keep_short, keptCount, size(keptKb))
+            shadercOn -> lineOf(R.string.on)
+            pending(Fix.SHADERC) -> lineOf(R.string.not_applied)
             keepWhy == "official" -> lineOf(R.string.built_in)
             keepWhy.isNotEmpty() -> lineOf(R.string.not_supported)
-            on(tile) -> countOf(R.plurals.keep_short, keptCount, size(keptKb))
             keepPending -> lineOf(R.string.not_applied)
             else -> lineOf(R.string.off)
         }
@@ -256,8 +272,9 @@ data class Status(
             else -> tone(tile.fixes.first())
         }
         Tile.KEEP -> when {
-            keepWhy.isNotEmpty() -> Tone.IDLE
             on(tile) -> Tone.GOOD
+            pending(Fix.SHADERC) -> Tone.WAITING
+            keepWhy.isNotEmpty() -> Tone.IDLE
             keepPending -> Tone.WAITING
             else -> Tone.IDLE
         }
@@ -290,6 +307,8 @@ fun parseStatus(text: String): Status? {
         kvmallocWhy = map["kvmalloc_why"].orEmpty(),
         keepWhy = map["keep_why"].orEmpty(),
         keepCapKb = map["keep_cap_kb"]?.toLongOrNull(),
+        shadercWhy = map["shaderc_why"].orEmpty(),
+        shadercKb = map["shaderc_kb"]?.toLongOrNull(),
         kept = Keep.entries.associateWith { keep ->
             Kept(
                 wanted = map[keep.key] == "1",

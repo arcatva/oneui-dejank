@@ -9,10 +9,11 @@ import org.junit.Test
 class ModelTest {
     private fun status(vararg change: Pair<String, String>): Status {
         val map = linkedMapOf(
-            "api" to "5", "version" to "v0.2.0", "build" to "4", "paused" to "0",
+            "api" to "6", "version" to "v0.2.0", "build" to "4", "paused" to "0",
             "gpu" to "1", "gpu_state" to "on", "gpu_why" to "", "gpu_was" to "2",
             "kvmalloc" to "0", "kvmalloc_state" to "off", "kvmalloc_why" to "", "kvmalloc_seen" to "", "kvmalloc_changed" to "",
             "reserve" to "1", "reserve_state" to "on", "reserve_now" to "300", "reserve_stock" to "73",
+            "shaderc" to "0", "shaderc_state" to "off", "shaderc_why" to "", "shaderc_kb" to "",
             "keep_why" to "", "mem_total_kb" to "11351040", "keep_cap_kb" to "1135100",
             "ui" to "1", "ui_state" to "on", "ui_kb" to "861184", "ui_min_kb" to "798720",
             "home" to "1", "home_state" to "on", "home_kb" to "824320", "home_min_kb" to "559104",
@@ -27,6 +28,41 @@ class ModelTest {
         "ui_state" to "off", "ui_kb" to "", "ui_min_kb" to "",
         "home_state" to "off", "home_kb" to "", "home_min_kb" to "",
     )
+
+    @Test
+    fun `the shader compiler is a switch among what is kept`() {
+        val off = status()
+        assertNull(off.shadercValue())
+        assertEquals(Tone.IDLE, off.tone(Fix.SHADERC))
+        assertFalse(off.anyPending)
+
+        val on = status("shaderc" to "1", "shaderc_state" to "on", "shaderc_kb" to "23120")
+        assertEquals(lineOf(R.string.plain, "23 MB"), on.shadercValue())
+        assertEquals(Tone.GOOD, on.tone(Fix.SHADERC))
+        // the tile goes on counting the processes
+        assertEquals(countOf(R.plurals.keep_short, 2, "1.3 GB"), on.short(Tile.KEEP))
+
+        // held while no process is kept: the tile is on all the same
+        val alone = status("shaderc" to "1", "shaderc_state" to "on", "shaderc_kb" to "23120", *fresh)
+        assertTrue(alone.on(Tile.KEEP))
+        assertEquals(lineOf(R.string.on), alone.short(Tile.KEEP))
+        assertEquals(Tone.GOOD, alone.tone(Tile.KEEP))
+        assertEquals(0L, alone.keptKb)
+
+        val wanted = status("shaderc" to "1")
+        assertEquals(lineOf(R.string.not_applied), wanted.shadercValue())
+        assertEquals(Tone.WAITING, wanted.tone(Fix.SHADERC))
+        assertTrue(wanted.anyPending)
+
+        val other = status("shaderc_state" to "na", "shaderc_why" to "file")
+        assertEquals(lineOf(R.string.kept_none), other.shadercValue())
+        assertEquals(Tone.IDLE, other.tone(Fix.SHADERC))
+        assertEquals(lineOf(R.string.not_supported), status("shaderc_state" to "na", "shaderc_why" to "build").shadercValue())
+
+        val failed = status("shaderc" to "1", "shaderc_state" to "err", "shaderc_why" to "start")
+        assertEquals(lineOf(R.string.failed), failed.shadercValue())
+        assertEquals(Tone.BAD, failed.tone(Fix.SHADERC))
+    }
 
     @Test
     fun `text that is not a status is rejected`() {
