@@ -255,7 +255,7 @@ data class Status(
             else -> short(tile.fixes.first())
         }
         Tile.KEEP -> when {
-            keptCount > 0 -> countOf(R.plurals.keep_short, keptCount, size(keptKb))
+            keepWhy.isEmpty() && keptCount > 0 -> countOf(R.plurals.keep_short, keptCount, size(keptKb))
             shadercOn -> lineOf(R.string.on)
             pending(Fix.SHADERC) -> lineOf(R.string.not_applied)
             keepWhy == "official" -> lineOf(R.string.built_in)
@@ -272,9 +272,10 @@ data class Status(
             else -> tone(tile.fixes.first())
         }
         Tile.KEEP -> when {
-            on(tile) -> Tone.GOOD
+            shadercOn -> Tone.GOOD
             pending(Fix.SHADERC) -> Tone.WAITING
             keepWhy.isNotEmpty() -> Tone.IDLE
+            keptCount > 0 -> Tone.GOOD
             keepPending -> Tone.WAITING
             else -> Tone.IDLE
         }
